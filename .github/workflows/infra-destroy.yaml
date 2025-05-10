@@ -1,0 +1,135 @@
+name: 'Destroy Google Cloud Infrastructure'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  # Terraform State variables
+  TFSTATE: 'tfstate'
+
+  # Terraform variables
+  TF_VAR_environment: ${{ github.ref_name }}
+  TF_VAR_location: ${{ vars.GCP_REGION }}
+  TF_VAR_unique_suffix: ${{ vars.UNIQUE_SUFFIX || 'gcp-101' }}
+  TF_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  TF_BACKEND_BUCKET: ${{ vars.BACKEND_STORAGE_ACCOUNT }}
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+  SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT }}
+  NAMESPACE: dev
+  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+
+  TF_VAR_network_option: ${{ vars.NETWORK_OPTION || 'create_new' }}
+  TF_VAR_existing_vpc_name: ${{ vars.VPC_NAME || '' }}
+  TF_VAR_existing_subnet_name: ${{ vars.SUBNET_NAME || '' }}
+
+jobs:
+
+  remove_app:
+    name: Remove Helm APP
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+    
+    - name: Setup gcloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ vars.GCP_PROJECT_ID }}
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Set up Cloud SDK with GKE plugin
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+
+    - name: Fetch GKE credentials
+      run: |
+          gcloud container clusters get-credentials \
+            ${{ env.GKE_CLUSTER_NAME }} \
+            --dns-endpoint \
+            --region ${{ env.TF_VAR_location }} \
+            --project ${{ env.TF_VAR_GCP_PROJECT_ID }}
+
+    - name: Deploy Helm Chart (demo‑app)
+      run: |
+        helm uninstall demo-app --namespace ${{ env.NAMESPACE }} --ignore-not-found
+
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    needs: remove_app
+    defaults:
+      run:
+        working-directory: infra/env/dev
+
+    steps:      
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+     
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.0'
+        terraform_wrapper: false
+
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+
+    - name: Setup gcloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ vars.GCP_PROJECT_ID }}
+
+
+    - name: Pause to let gcp resources be removed before destroy
+      run: sleep 180   
+
+    # - name: Delete Cloud Endpoints service
+    #   run: |
+    #     gcloud endpoints services delete "demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog" \
+    #     --project "${{ vars.GCP_PROJECT_ID }}" --quiet
+
+    - name: Terraform Init
+      run: |
+        terraform init \
+          -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+          -backend-config="prefix=terraform/state/dev"
+
+    - name: Terraform Destroy Plan
+      run: |
+        terraform plan -destroy \
+          -out="${{ env.TF_VAR_environment }}.destroy.tfplan" \
+          -var="region=${{ env.TF_VAR_location }}" \
+          -var="project_id=${{ env.TF_VAR_GCP_PROJECT_ID }}" \
+          -var="network_option=${{ env.TF_VAR_network_option }}" \
+          -var="existing_vpc_name=${{ env.TF_VAR_existing_vpc_name }}" \
+          -var="existing_subnet_name=${{ env.TF_VAR_existing_subnet_name }}"
+
+    - name: Terraform Destroy Apply
+      run: |
+        terraform apply -auto-approve \
+          ${{ env.TF_VAR_environment }}.destroy.tfplan

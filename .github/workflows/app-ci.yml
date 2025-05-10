@@ -1,0 +1,209 @@
+name: Application CI/CD
+
+
+on:
+  workflow_dispatch:
+  
+
+env:
+  # --- Global Variables ---
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+  ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_ID }}
+  ARTIFACT_REGISTRY_LOCATION: ${{ vars.GCP_REGION }}
+  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+  GKE_LOCATION: ${{ vars.GCP_REGION }}
+  API_IP_ADDRESS: "http://${{ vars.API_IP_ADDRESS }}"
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+  SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT }}
+  FRONT_IP_ADDRESS: ${{ vars.FRONT_IP_ADDRESS }}
+  FRONT_IP_NAME:    ${{ vars.FRONT_IP_NAME }}
+  API_IP_NAME:  ${{ vars.API_IP_NAME }}
+  BACKEND_URL: "https://backend.${{ vars.PROJECT_NUMBER }}.gcp.bain.dev"
+  CLOUD_ARMOR_POLICY_NAME: ${{ vars.CLOUD_ARMOR_POLICY_NAME }}
+  NAMESPACE: dev
+
+jobs:
+  # --- Code Quality Checks (Fast version) ---
+  code-quality:
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests && !inputs.deploy_only }}
+    strategy:
+      fail-fast: false  # Don't fail entire matrix on single failure
+      matrix:
+        app: [frontend, backend]
+        include:
+        - app: frontend
+          working-directory: ./app/frontend
+          node-version: '18'
+        - app: backend
+          working-directory: ./app/backend
+          python-version: '3.11'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Frontend Analysis (Node.js)
+    - name: Set up Node.js
+      if: matrix.app == 'frontend'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        
+
+    - name: Run ESLint (Frontend)
+      if: matrix.app == 'frontend'
+      working-directory: ${{ matrix.working-directory }}
+      run: |
+        npm install --omit=prod
+        npx eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0 || echo "::warning::ESLint found issues but continuing"
+
+    # Python backend Analysis
+    - name: Set up Python
+      if: matrix.app == 'backend'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+        cache-dependency-path: ${{ matrix.working-directory }}/requirements.txt
+
+    - name: Run Linting (Backend)
+      if: matrix.app == 'backend'
+      working-directory: ${{ matrix.working-directory }}
+      run: |
+        pip install flake8 pylint
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        fi
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || echo "::warning::Flake8 found issues but continuing"
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+    if: ${{ !inputs.deploy_only && (always() && !contains(needs.*.result, 'failure')) }}
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+    strategy:
+      matrix:
+        app: [frontend, backend]
+        include:
+          - app: frontend
+            context: ./app/frontend
+            dockerfile: ./app/frontend/Dockerfile
+          - app: backend
+            context: ./app/backend
+            dockerfile: ./app/backend/Dockerfile
+            build_args: ""
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Calculate and Set Image Tag
+      id: set_tag
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+    - name: 'Authenticate to GCP'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Configure Docker for Artifact Registry
+      run: gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev --quiet
+
+    # Matrix build for all applications
+    - name: Build & Push ${{ matrix.app }}
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.context }}
+        file: ${{ matrix.dockerfile }}
+        push: true
+        tags: ${{ env.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ matrix.app }}:${{ steps.set_tag.outputs.tag }}
+        build-args: |
+          ${{ matrix.app == 'frontend' && format('REACT_APP_BACKEND_URL={0}', env.BACKEND_URL) || '' }}
+        cache-from: type=gha,scope=${{ matrix.app }}
+        cache-to: type=gha,scope=${{ matrix.app }},mode=max
+
+
+  deploy:
+    name: Deploy to GKE with Helm
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+    
+    - name: Setup gcloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ vars.GCP_PROJECT_ID }}
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Set up Cloud SDK with GKE plugin
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+
+    - name: Fetch GKE credentials
+      run: |
+          gcloud container clusters get-credentials \
+            ${{ env.GKE_CLUSTER_NAME }} \
+            --dns-endpoint \
+            --region ${{ env.GKE_LOCATION }} \
+            --project ${{ env.GCP_PROJECT_ID }}
+
+    - name: Deploy Helm Chart (demo‑app)
+      run: |
+        echo "FRONT_IP_ADDRESS=$FRONT_IP_ADDRESS"
+        echo "ARTIFACT_REGISTRY_LOCATION=$ARTIFACT_REGISTRY_LOCATION"
+        echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}"
+        helm upgrade --install demo-app ./app/helmcharts \
+          --namespace ${{ env.NAMESPACE }} \
+          --create-namespace \
+          --set PodsserviceAccount=pods-sa \
+          --set Espv2serviceAccount=espv2-sa \
+          --set-string frontend.image.repository="${{ env.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/frontend" \
+          --set-string frontend.image.tag="${{ needs.build-and-push.outputs.image_tag }}" \
+          --set-string frontend.ingress.staticIpName="${{ env.FRONT_IP_NAME }}" \
+          --set-string backend.image.repository="${{ env.ARTIFACT_REGISTRY_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/backend" \
+          --set-string backend.image.tag="${{ needs.build-and-push.outputs.image_tag }}" \
+          --set-string backend.ingress.staticIpName="${{ env.API_IP_NAME }}" \
+          --set-string espv2.ingress.staticIpName="${{ env.API_IP_NAME }}" \
+          --set-string 'espv2.args[0]=--http_port=8081' \
+          --set-string 'espv2.args[1]=--backend=http://backend-service:8000' \
+          --set-string 'espv2.args[2]=--service=demoapi.endpoints.${{ env.GCP_PROJECT_ID }}.cloud.goog' \
+          --set-string 'espv2.args[3]=--rollout_strategy=managed' \
+          --set-string 'espv2.args[4]=--cors_preset=basic' \
+          --set-string 'espv2.args[5]=--cors_allow_origin=*' \
+          --set-string 'espv2.args[6]=--cors_allow_methods=GET\,POST\,PUT\,OPTIONS' \
+          --set-string 'espv2.args[7]=--cors_allow_headers=Origin\,Content-Type\,Accept\,Authorization\,x-api-key' \
+          --set-string securityPolicy.name="${{ env.CLOUD_ARMOR_POLICY_NAME }}" \
+          --set-string frontend.ingress.host="frontend.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string espv2.ingress.host="backend.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string frontend.managedCert="frontend.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string espv2.managedCert="backend.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \

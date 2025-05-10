@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: espv2-ingress
+  annotations:
+    networking.gke.io/managed-certificates: back-managed-cert
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "{{ .Values.espv2.ingress.staticIpName }}"
+spec:
+  rules:
+  - host: {{ .Values.espv2.ingress.host }} 
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: espv2-service
+            port:
+              number: {{ .Values.espv2.service.port }}
+
+

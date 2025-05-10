@@ -1,0 +1,52 @@
+# Valores globales
+
+PodsserviceAccount: ""              
+Espv2ServiceAccount: ""            
+
+
+securityPolicy:
+  name: ""    
+
+# Frontend
+frontend:
+  image:
+    repository: ""               # e.g. us-east4-docker.pkg.dev/.../frontend
+    tag: ""
+  backendConfig: "my-backendconfig"
+  ingress:
+    host: ""
+    staticIpName: ""
+  managedCert: ""
+
+# Backend
+backend:
+  image:
+    repository: ""
+    tag: ""
+  backendConfig: "my-backendconfig"
+  ingress:
+    host: ""
+    staticIpName: ""
+  
+
+# ESPv2 (Endpoints)
+espv2:
+  image:
+    repository: gcr.io/endpoints-release/endpoints-runtime
+    tag: "2"
+  service:
+    port: 80
+    targetPort: 8081
+  ingress:
+    host: ""
+    staticIpName: ""
+  managedCert: ""
+  args:
+    - "--http_port=8081"
+    - "--backend=http://backend-service:8000"
+    - "--service=demoapi.endpoints..cloud.goog"
+    - "--rollout_strategy=managed"
+    - "--cors_preset=basic"
+    - "--cors_allow_origin=*"
+    - "--cors_allow_methods=GET,POST,PUT,OPTIONS"
+    - "--cors_allow_headers=Origin,Content-Type,Accept,Authorization,x-api-key"

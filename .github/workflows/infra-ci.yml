@@ -1,0 +1,451 @@
+name: 'Deploy Google Cloud Infrastructure'
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-ci.yml'
+      - '*.tf'
+    branches:
+      - main
+    tags:
+      - 'v*'
+       
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+env:
+  
+  # Terraform State variables
+  TFSTATE: 'tfstate'
+  
+  # Terraform variables
+  TF_VAR_environment: ${{ github.ref_name }}
+  TF_VAR_location: ${{ vars.GCP_REGION }}
+  TF_VAR_unique_suffix:  ${{ vars.UNIQUE_SUFFIX || 'gcp101' }}
+  TF_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  TF_BACKEND_BUCKET: ${{ vars.BACKEND_STORAGE_ACCOUNT }}
+  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+  SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT }}
+  NAMESPACE: dev
+  TF_VAR_network_option: ${{ vars.NETWORKING_OPTION || 'create_new' }}
+  TF_VAR_existing_vpc_name: ${{ vars.VPC_NAME || '' }}
+  TF_VAR_existing_subnet_name: ${{ vars.SUBNET_NAME || '' }}
+
+
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.0'
+        terraform_wrapper: false
+
+    - name: Terraform Format
+      run: terraform fmt -check -recursive
+      continue-on-error: true
+
+    - name: Install TFLint
+      run: |
+        curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+    - name: Run TFLint
+      run: |
+        tflint --recursive --format=compact
+      continue-on-error: true
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install tfsec
+      run: |
+        curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+    - name: Run tfsec
+      run: |
+        tfsec .
+      continue-on-error: true
+  # wiz-scan:
+  #   name: "Wiz-cli IaC Scan"
+  #   runs-on: ubuntu-latest
+  #   env:
+  #     SCAN_PATH: "infra/"
+  #     POLICY: "Default IaC policy" # Set the desired Wiz CLI policy to use
+
+  #   # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+  #   defaults:
+  #     run:
+  #       shell: bash
+
+  #   steps:
+  #     # Checkout the repository to the GitHub Actions runner
+  #     - name: Check out repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Download Wiz CLI
+  #       run: curl -o wizcli https://downloads.wiz.io/wizcli/latest/wizcli-linux-amd64 && chmod +x wizcli
+
+  #     - name: Authenticate to Wiz
+  #       run: ./wizcli auth --id "$WIZ_CLIENT_ID" --secret "$WIZ_CLIENT_SECRET"
+  #       env:
+  #         WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
+  #         WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
+      
+  #     - name: Run wiz CLI IaC scan
+  #       run: ./wizcli iac scan --path $SCAN_PATH --policy "$POLICY"
+    
+
+  terraform-fmt:
+
+    name: Terraform Format
+    runs-on: ubuntu-latest
+    needs: [lint, security]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.0'
+        terraform_wrapper: false
+
+    - name: Terraform format
+      run: terraform fmt -check -recursive
+      continue-on-error: true
+
+    - name: Terraform Init
+      run: |
+        cd infra/env/dev
+        terraform init -backend=false
+
+    - name: Terraform Validate
+      run: terraform validate
+
+  gcloud-auth:
+    name: Google Auth
+    runs-on: ubuntu-latest
+    steps:
+    - uses: 'actions/checkout@v4'
+    - id: 'auth'
+      name: 'Authenticate to GCP'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+    - id: 'gcloud'
+      name: 'gcloud'
+      run: |-
+        gcloud storage buckets list
+
+  infrastructure:
+    name: Terraform Plan & Apply
+    runs-on: ubuntu-latest
+    needs: [terraform-fmt]
+    defaults:
+      run:
+        working-directory: infra/env/dev
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.0'
+        terraform_wrapper: false
+
+    - name: 'Authenticate to GCP'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.SERVICE_ACCOUNT }}
+
+    - name: Terraform Init
+      id: init
+      run: |
+        terraform init \
+          -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
+          -backend-config="prefix=terraform/state/dev" \
+          
+
+          
+        
+    - name: Terraform Plan
+      run: |
+        terraform plan -lock=false -out='${{ env.TF_VAR_environment }}.plan.tfplan' \
+          -var="region=${{ env.TF_VAR_location }}" \
+          -var="project_id=${{ env.TF_VAR_GCP_PROJECT_ID }}" \
+          -var="network_option=${{ env.TF_VAR_network_option }}" \
+          -var="existing_vpc_name=${{ env.TF_VAR_existing_vpc_name }}" \
+          -var="existing_subnet_name=${{ env.TF_VAR_existing_subnet_name }}" \
+          -var="storage_location=${{ env.TF_VAR_location }}" \
+      
+          
+      continue-on-error: true
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-plan
+        path: infra/env/dev/${{ env.TF_VAR_environment }}.plan.tfplan
+        retention-days: 5
+
+    - name: Terraform Plan Status
+      if: steps.plan.outcome == 'failure'
+      run: exit 1
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      run: |
+        terraform apply -auto-approve -input=false ${{ env.TF_VAR_environment }}.plan.tfplan
+
+
+
+    - name: Capture Terraform Outputs
+      if: success()
+      run: |
+        # Project info
+        gh variable set PROJECT_NUMBER --body "$(terraform output -raw project_number)"
+
+        # Artifact repository
+        gh variable set ARTIFACT_REPOSITORY_URL --body "$(terraform output -raw repository_url)"
+        gh variable set Docker_IMAGE_PATH --body "$(terraform output -raw docker_image_path)"
+        gh variable set ARTIFACT_REGISTRY_ID --body "$(terraform output -raw repository_id)"
+
+        #Cloud armor 
+        gh variable set CLOUD_ARMOR_POLICY_NAME --body "$(terraform output -raw security_policy_name)"
+        
+        # Storage buckets
+        gh variable set APP_DATA_BUCKET --body "$(terraform output -json bucket_names | jq -r '.[0]')"
+        gh variable set APP_MEDIA_BUCKET --body "$(terraform output -json bucket_names | jq -r '.[1]')"
+        gh variable set VERTEX_AI_DATA_BUCKET --body "$(terraform output -json bucket_names | jq -r '.[2]')"
+        
+        # External Estatic Ip address
+        gh variable set FRONT_IP_ADDRESS --body "$(terraform output -raw gke_frontend_ip)"
+        gh variable set API_IP_ADDRESS --body "$(terraform output -raw gke_api_ip)"
+        gh variable set FRONT_IP_NAME --body "$(terraform output -raw gke_frontend_ip_name)"
+        gh variable set API_IP_NAME --body "$(terraform output -raw gke_api_ip_name)"
+
+        # Database info
+        gh variable set DB_CONNECTION_NAME --body "$(terraform output -raw db_connection_name)"
+        gh variable set DB_INSTANCE_NAME --body "$(terraform output -raw db_instance_name)"
+        gh variable set DB_DATABASE_NAME --body "$(terraform output -raw db_database_name)"
+        gh variable set DB_USER_NAME --body "$(terraform output -raw db_user_name)"
+        
+        # Firestore
+        gh variable set FIRESTORE_DATABASE --body "$(terraform output -raw firestore_database)"
+        gh variable set FIRESTORE_COLLECTIONS --body "$(terraform output -json firestore_collections)"
+        
+        # Vertex AI endpoints
+        gh variable set VERTEX_AI_ENDPOINT_ID --body "$(terraform output -raw vertex_ai_endpoint_id)"
+        gh variable set VERTEX_AI_INDEX_ENDPOINT_ID --body "$(terraform output -raw vertex_ai_index_endpoint_id)"
+        gh variable set VERTEX_AI_INDEX_ID --body "$(terraform output -raw vertex_ai_index_id)"
+        
+        # GKE info
+        gh variable set kubectl_command --body "$(terraform output -raw gke_kubectl_command)"
+        gh variable set GKE_CLUSTER_NAME --body "$(terraform output -raw gke_cluster_name)"
+        gh variable set GKE_CLUSTER_ENDPOINT --body "$(terraform output -raw gke_cluster_endpoint)"
+      
+        # Network info
+        gh variable set NETWORK_NAME --body "$(terraform output -raw network_name)"
+        
+        # Document AI (Processors)
+        gh variable set FORM_PARSER_ENDPOINT --body "$(terraform output -json processor_endpoints | jq -r '."form-parser"')"
+        gh variable set INVOICE_PROCESSOR_ENDPOINT --body "$(terraform output -json processor_endpoints | jq -r '."invoice-processor"')"
+        gh variable set OCR_PROCESSOR_ENDPOINT --body "$(terraform output -json processor_endpoints | jq -r '."ocr-processor"')"
+        
+        # Service accounts
+        gh variable set GSA_PODS_SERVICE_ACCOUNT --body "$(terraform output -raw pods_service_account_email)"
+        
+      env:
+        GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
+
+    - name: Set up Cloud SDK with GKE plugin
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+
+    - name: Get GKE Credentials
+      run: |
+          gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
+            --dns-endpoint \
+            --region=${{ env.TF_VAR_location }} \
+            --project=${{ env.TF_VAR_GCP_PROJECT_ID }}
+
+
+    - name: Create Kubernetes Namespace
+      run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+      
+    - name: Create Kubernetes Service Account for Pods
+      run: |
+        kubectl create serviceaccount pods-sa -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+      
+    - name: Create Kubernetes Service Account for ESPV2
+      run: |
+        kubectl create serviceaccount espv2-sa -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+      
+    - name: Annotate Pods Service Account for Workload Identity
+      run: |
+        kubectl annotate serviceaccount pods-sa -n ${{ env.NAMESPACE }} \
+        iam.gke.io/gcp-service-account=$(terraform output -raw pods_service_account_email) --overwrite
+      
+    - name: Annotate ESPV2 Service Account for Workload Identity
+      run: |
+        kubectl annotate serviceaccount espv2-sa -n ${{ env.NAMESPACE }} \
+        iam.gke.io/gcp-service-account=$(terraform output -raw espv2_service_account_email) --overwrite
+      
+    - name: Bind Kubernetes Pods Service Account to IAM Role
+      run: |
+        gcloud iam service-accounts add-iam-policy-binding $(terraform output -raw pods_service_account_email) \
+        --role roles/iam.workloadIdentityUser \
+        --member "serviceAccount:${{ env.TF_VAR_GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/pods-sa]"
+      
+    - name: Bind Kubernetes ESPV2 Service Account to IAM Role
+      run: |
+        gcloud iam service-accounts add-iam-policy-binding $(terraform output -raw espv2_service_account_email) \
+        --role roles/iam.workloadIdentityUser \
+        --member "serviceAccount:${{ env.TF_VAR_GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/espv2-sa]"
+      
+
+  cloud-endpoint:
+    name: Configure API Gateway
+    runs-on: ubuntu-latest
+    needs: [infrastructure]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          
+
+      - name: Set ENDPOINT_HOST
+        run: |
+          echo "ENDPOINT_HOST=demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog" >> $GITHUB_ENV
+  
+      - name: Install envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+  
+      - name: Generate OpenAPI spec
+        run: |
+          envsubst '${ENDPOINT_HOST}' \
+            < app/backend/openapi.tpl.yaml \
+            > app/backend/openapi.yaml
+  
+      - name: Install swagger-cli
+        run: npm install -g @apidevtools/swagger-cli
+    
+      - name: Validate OpenAPI spec
+        run: swagger-cli validate app/backend/openapi.yaml
+  
+      - name: Deploy to Cloud Endpoints
+        run: |
+          gcloud endpoints services deploy \
+          app/backend/openapi.yaml \
+          --project ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+  
+      - name: Create or reuse API Key
+        id: create_api_key
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          # Exit immediately if a command exits with a non-zero status.
+          set -e
+
+          
+          NAME="Endpoints API Key for ${PROJECT_ID}"
+          FILTER_EXPRESSION="displayName=\"${NAME}\"" 
+
+          echo "→ Looking for API Key with display name: ${NAME}"
+          KEY_NAME=$(gcloud services api-keys list \
+            --project="${PROJECT_ID}" \
+            --filter="${FILTER_EXPRESSION}" \
+            --format="value(name)" \
+            --limit=1) # Limit to 1 just in case of duplicates somehow
+
+          if [[ -z "$KEY_NAME" ]]; then
+            echo "→ API Key not found. Creating new API Key..."
+
+            # Create the key
+            gcloud services api-keys create \
+              --project="${PROJECT_ID}" \
+              --display-name="${NAME}" \
+              --quiet
+
+            
+            echo "→ Fetching name of newly created API Key..."
+            KEY_NAME=$(gcloud services api-keys list \
+              --project="${PROJECT_ID}" \
+              --filter="${FILTER_EXPRESSION}" \
+              --format="value(name)" \
+              --limit=1) # Re-fetch the name
+
+            # Add a check in case fetching failed after creation
+            if [[ -z "$KEY_NAME" ]]; then
+              echo "ERROR: Failed to retrieve the key name after creation."
+              exit 1
+            fi
+             echo "→ Successfully created and retrieved API Key name: ${KEY_NAME##*/}"
+            # ----------------------------------------------------
+
+          else
+            echo "→ Reusing existing API Key: ${KEY_NAME##*/}"
+          fi
+
+          echo "→ Fetching Key String for ${KEY_NAME##*/}"
+          KEY_STRING=$(gcloud services api-keys get-key-string "${KEY_NAME}" \
+            --project="${PROJECT_ID}" \
+            --format="value(keyString)") 
+
+          if [[ -z "$KEY_STRING" ]]; then
+             echo "ERROR: Failed to retrieve the key string for key ${KEY_NAME}."
+             exit 1
+          fi
+
+          echo "→ Applying restrictions to ${KEY_NAME##*/}"
+          gcloud services api-keys update "${KEY_NAME}" \
+            --project="${PROJECT_ID}" \
+            --api-target=service=demoapi.endpoints.${PROJECT_ID}.cloud.goog
+            
+
+          echo "→ API Key setup complete."
+
+          # Add the key string to GitHub environment variables and mask it
+          echo "ENDPOINTS_API_KEY=${KEY_STRING}" >> $GITHUB_ENV
+          echo "::add-mask::${KEY_STRING}"
+
+      - name: Save ENDPOINT API Key to GitHub Secrets
+        run: |
+          gh secret set ENDPOINTS_API_KEY --body "$ENDPOINTS_API_KEY" 
+          
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}

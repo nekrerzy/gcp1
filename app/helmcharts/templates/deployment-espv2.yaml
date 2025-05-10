@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: espv2
+  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: espv2
+  template:
+    metadata:
+      labels:
+        app: espv2
+    spec:
+      serviceAccountName: {{ .Values.Espv2serviceAccount }}
+      containers:
+      - name: esp
+        image: "{{ .Values.espv2.image.repository }}:{{ .Values.espv2.image.tag }}"
+        args:
+{{- range .Values.espv2.args }}
+        - "{{ . }}"
+{{- end }}
+        ports:
+        - name: esp-http
+          containerPort: 8081
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

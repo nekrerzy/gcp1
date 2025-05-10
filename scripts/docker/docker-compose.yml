@@ -1,0 +1,36 @@
+services:
+  gcp-takeoff:
+    image: gcp-takeoff:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the repository as read-only to avoid permission issues
+      - ${REPO_ROOT:-../../}:/repo:ro
+      # Mount a volume for takeoff config and other generated files
+      - gcp-takeoff-config:/config
+      # Mount credential volumes
+      - gcloud-config:/root/.config/gcloud
+      - github-config:/root/.config/gh
+      - ssh-config:/root/.ssh
+    environment:
+      # Environment variables
+      - CONFIG_DIR=/config
+      # Pass through any GitHub token if set
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    # Using entrypoint override for volume-aware setup
+    entrypoint: [ "/usr/bin/entrypoint-compose.sh" ]
+    # Interactive mode
+    stdin_open: true
+    tty: true
+
+volumes:
+  # Persistent volumes for configuration
+  gcp-takeoff-config:
+    name: gcp-takeoff-config
+  gcloud-config:
+    name: gcloud-config
+  github-config:
+    name: github-config
+  ssh-config:
+    name: ssh-config

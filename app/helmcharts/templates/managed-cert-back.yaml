@@ -1,0 +1,8 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: back-managed-cert
+  namespace: dev
+spec:
+  domains:
+    - {{ .Values.espv2.managedCert }}

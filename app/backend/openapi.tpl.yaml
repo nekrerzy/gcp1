@@ -1,0 +1,108 @@
+swagger: "2.0"
+info:
+  title: "GCP GenAI Platform API"
+  description: "API for GCP Generative AI Platform"
+  version: "1.0.0"
+
+schemes:
+  - "https"
+  - "http"
+
+host: "${ENDPOINT_HOST}"
+
+securityDefinitions:
+  api_key:
+    type: apiKey
+    in: header
+    name: x-api-key
+
+security:
+  - api_key: []
+
+x-google-management:
+  metrics:
+    # Metrics configuration if needed
+  endpoints:
+    - name: "${ENDPOINT_HOST}"
+
+paths:
+  /:
+    get:
+      summary: Internal health probe endpoint
+      operationId: getProbeStatus
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+        '500':
+          description: Service is unhealthy
+
+
+  /health:
+    get:
+      summary: Get system health status
+      description: Returns the health status of all system components
+      operationId: getHealth
+      responses:
+        '200':
+          description: Successful health check
+          schema:
+            $ref: '#/definitions/HealthResponse'
+        '401':
+          description: Unauthorized - Missing or invalid credentials
+        '500':
+          description: Internal server error
+    options:
+      summary: CORS preflight for health endpoint
+      operationId: corsHealth
+      security: []
+      responses:
+        '200':
+          description: CORS headers returned
+
+
+definitions:
+  ServiceHealth:
+    type: object
+    required:
+      - status
+      - latency
+    properties:
+      status:
+        type: string
+        enum: [healthy, unhealthy]
+      latency:
+        type: number
+        format: float
+      error:
+        type: string
+  
+  HealthResponse:
+    type: object
+    required:
+      - status
+      - timestamp
+      - services
+    properties:
+      status:
+        type: string
+        enum: [healthy, unhealthy]
+      timestamp:
+        type: string
+        format: date-time
+      services:
+        type: object
+        required:
+          - storage
+          - openai
+          - search
+          - doc_intelligence
+        properties:
+          storage:
+            $ref: '#/definitions/ServiceHealth'
+          openai:
+            $ref: '#/definitions/ServiceHealth'
+          search:
+            $ref: '#/definitions/ServiceHealth'
+          doc_intelligence:
+            $ref: '#/definitions/ServiceHealth'
