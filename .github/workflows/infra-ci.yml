@@ -250,57 +250,57 @@ jobs:
         CURRENT_ENV="${{ needs.determine-environment.outputs.environment }}"
 
         # Project info
-        gh variable set PROJECT_NUMBER $CURRENT_ENV --body "$(terraform output -raw project_number)"
+        gh variable set PROJECT_NUMBER --env $CURRENT_ENV --body "$(terraform output -raw project_number)"
 
         # Artifact repository
-        gh variable set ARTIFACT_REPOSITORY_URL $CURRENT_ENV --body "$(terraform output -raw repository_url)"
-        gh variable set Docker_IMAGE_PATH $CURRENT_ENV --body "$(terraform output -raw docker_image_path)"
-        gh variable set ARTIFACT_REGISTRY_ID $CURRENT_ENV --body "$(terraform output -raw repository_id)"
+        gh variable set ARTIFACT_REPOSITORY_URL --env $CURRENT_ENV --body "$(terraform output -raw repository_url)"
+        gh variable set Docker_IMAGE_PATH --env $CURRENT_ENV --body "$(terraform output -raw docker_image_path)"
+        gh variable set ARTIFACT_REGISTRY_ID --env $CURRENT_ENV --body "$(terraform output -raw repository_id)"
 
         #Cloud armor 
-        gh variable set CLOUD_ARMOR_POLICY_NAME $CURRENT_ENV --body "$(terraform output -raw security_policy_name)"
+        gh variable set CLOUD_ARMOR_POLICY_NAME --env $CURRENT_ENV --body "$(terraform output -raw security_policy_name)"
         
         # Storage buckets
-        gh variable set APP_DATA_BUCKET $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[0]')"
-        gh variable set APP_MEDIA_BUCKET $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[1]')"
-        gh variable set VERTEX_AI_DATA_BUCKET $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[2]')"
+        gh variable set APP_DATA_BUCKET --env $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[0]')"
+        gh variable set APP_MEDIA_BUCKET --env $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[1]')"
+        gh variable set VERTEX_AI_DATA_BUCKET --env $CURRENT_ENV --body "$(terraform output -json bucket_names | jq -r '.[2]')"
         
         # External Estatic Ip address
-        gh variable set FRONT_IP_ADDRESS $CURRENT_ENV --body "$(terraform output -raw gke_frontend_ip)"
-        gh variable set API_IP_ADDRESS $CURRENT_ENV --body "$(terraform output -raw gke_api_ip)"
-        gh variable set FRONT_IP_NAME $CURRENT_ENV --body "$(terraform output -raw gke_frontend_ip_name)"
-        gh variable set API_IP_NAME $CURRENT_ENV --body "$(terraform output -raw gke_api_ip_name)"
+        gh variable set FRONT_IP_ADDRESS --env $CURRENT_ENV --body "$(terraform output -raw gke_frontend_ip)"
+        gh variable set API_IP_ADDRESS --env $CURRENT_ENV --body "$(terraform output -raw gke_api_ip)"
+        gh variable set FRONT_IP_NAME --env $CURRENT_ENV --body "$(terraform output -raw gke_frontend_ip_name)"
+        gh variable set API_IP_NAME --env $CURRENT_ENV --body "$(terraform output -raw gke_api_ip_name)"
 
         # Database info
-        gh variable set DB_CONNECTION_NAME $CURRENT_ENV --body "$(terraform output -raw db_connection_name)"
-        gh variable set DB_INSTANCE_NAME $CURRENT_ENV --body "$(terraform output -raw db_instance_name)"
-        gh variable set DB_DATABASE_NAME $CURRENT_ENV --body "$(terraform output -raw db_database_name)"
-        gh variable set DB_USER_NAME $CURRENT_ENV --body "$(terraform output -raw db_user_name)"
+        gh variable set DB_CONNECTION_NAME --env $CURRENT_ENV --body "$(terraform output -raw db_connection_name)"
+        gh variable set DB_INSTANCE_NAME --env $CURRENT_ENV --body "$(terraform output -raw db_instance_name)"
+        gh variable set DB_DATABASE_NAME --env $CURRENT_ENV --body "$(terraform output -raw db_database_name)"
+        gh variable set DB_USER_NAME --env $CURRENT_ENV --body "$(terraform output -raw db_user_name)"
         
         # Firestore
-        gh variable set FIRESTORE_DATABASE $CURRENT_ENV --body "$(terraform output -raw firestore_database)"
-        gh variable set FIRESTORE_COLLECTIONS $CURRENT_ENV --body "$(terraform output -json firestore_collections)"
+        gh variable set FIRESTORE_DATABASE --env $CURRENT_ENV --body "$(terraform output -raw firestore_database)"
+        gh variable set FIRESTORE_COLLECTIONS --env $CURRENT_ENV --body "$(terraform output -json firestore_collections)"
         
         # Vertex AI endpoints
-        gh variable set VERTEX_AI_ENDPOINT_ID $CURRENT_ENV --body "$(terraform output -raw vertex_ai_endpoint_id)"
-        gh variable set VERTEX_AI_INDEX_ENDPOINT_ID $CURRENT_ENV --body "$(terraform output -raw vertex_ai_index_endpoint_id)"
-        gh variable set VERTEX_AI_INDEX_ID $CURRENT_ENV --body "$(terraform output -raw vertex_ai_index_id)"
+        gh variable set VERTEX_AI_ENDPOINT_ID --env $CURRENT_ENV --body "$(terraform output -raw vertex_ai_endpoint_id)"
+        gh variable set VERTEX_AI_INDEX_ENDPOINT_ID --env $CURRENT_ENV --body "$(terraform output -raw vertex_ai_index_endpoint_id)"
+        gh variable set VERTEX_AI_INDEX_ID --env $CURRENT_ENV --body "$(terraform output -raw vertex_ai_index_id)"
         
         # GKE info
-        gh variable set kubectl_command $CURRENT_ENV --body "$(terraform output -raw gke_kubectl_command)"
-        gh variable set GKE_CLUSTER_NAME $CURRENT_ENV --body "$(terraform output -raw gke_cluster_name)"
-        gh variable set GKE_CLUSTER_ENDPOINT $CURRENT_ENV --body "$(terraform output -raw gke_cluster_endpoint)"
+        gh variable set kubectl_command --env $CURRENT_ENV --body "$(terraform output -raw gke_kubectl_command)"
+        gh variable set GKE_CLUSTER_NAME --env $CURRENT_ENV --body "$(terraform output -raw gke_cluster_name)"
+        gh variable set GKE_CLUSTER_ENDPOINT --env $CURRENT_ENV --body "$(terraform output -raw gke_cluster_endpoint)"
       
         # Network info
-        gh variable set NETWORK_NAME $CURRENT_ENV --body "$(terraform output -raw network_name)"
+        gh variable set NETWORK_NAME --env $CURRENT_ENV --body "$(terraform output -raw network_name)"
         
         # Document AI (Processors)
-        gh variable set FORM_PARSER_ENDPOINT $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."form-parser"')"
-        gh variable set INVOICE_PROCESSOR_ENDPOINT $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."invoice-processor"')"
-        gh variable set OCR_PROCESSOR_ENDPOINT $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."ocr-processor"')"
+        gh variable set FORM_PARSER_ENDPOINT --env $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."form-parser"')"
+        gh variable set INVOICE_PROCESSOR_ENDPOINT --env $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."invoice-processor"')"
+        gh variable set OCR_PROCESSOR_ENDPOINT --env $CURRENT_ENV --body "$(terraform output -json processor_endpoints | jq -r '."ocr-processor"')"
         
         # Service accounts
-        gh variable set GSA_PODS_SERVICE_ACCOUNT $CURRENT_ENV --body "$(terraform output -raw pods_service_account_email)"
+        gh variable set GSA_PODS_SERVICE_ACCOUNT --env $CURRENT_ENV --body "$(terraform output -raw pods_service_account_email)"
         
       env:
         GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
@@ -475,7 +475,7 @@ jobs:
 
       - name: Save ENDPOINT API Key to GitHub Secrets
         run: |
-          gh secret set ENDPOINTS_API_KEY $CURRENT_ENV --body "$ENDPOINTS_API_KEY" 
+          gh secret set ENDPOINTS_API_KEY --env $CURRENT_ENV --body "$ENDPOINTS_API_KEY" 
           
         env:
           GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
