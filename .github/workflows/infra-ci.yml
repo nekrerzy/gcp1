@@ -35,12 +35,30 @@ env:
   TF_VAR_existing_vpc_name: ${{ vars.VPC_NAME || '' }}
   TF_VAR_existing_subnet_name: ${{ vars.SUBNET_NAME || '' }}
 
+    
 
 
 jobs:
+
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* && "${{ github.ref }}" == *[Vv]* ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT  # Default fallback
+          fi
+
   lint:
+    needs: determine-environment
     name: lint
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -64,9 +82,11 @@ jobs:
       run: |
         tflint --recursive --format=compact
       continue-on-error: true
+
   security:
+    needs: determine-environment
     name: security
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -112,10 +132,10 @@ jobs:
 
   terraform-fmt:
 
+    needs: [determine-environment, lint, security]
     name: Terraform Format
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
-    needs: [lint, security]
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -139,8 +159,9 @@ jobs:
       run: terraform validate
 
   gcloud-auth:
+    needs: [determine-environment]
     name: Google Auth
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
     steps:
     - uses: 'actions/checkout@v4'
@@ -157,10 +178,10 @@ jobs:
         gcloud storage buckets list
 
   infrastructure:
+    needs: [determine-environment, terraform-fmt, gcloud-auth]
     name: Terraform Plan & Apply
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
-    needs: [terraform-fmt]
     defaults:
       run:
         working-directory: infra/env/dev
@@ -330,10 +351,10 @@ jobs:
       
 
   cloud-endpoint:
+    needs: [infrastructure, determine-environment]
     name: Configure API Gateway
-    environment: ${{ vars.ENVIRONMENT || 'dev' }}
+    environment: ${{ needs.determine-environment.outputs.environment }}
     runs-on: ubuntu-latest
-    needs: [infrastructure]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
