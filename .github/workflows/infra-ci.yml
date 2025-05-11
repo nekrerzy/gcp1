@@ -475,7 +475,7 @@ jobs:
 
       - name: Save ENDPOINT API Key to GitHub Secrets
         run: |
-          gh secret set ENDPOINTS_API_KEY --env $CURRENT_ENV --body "$ENDPOINTS_API_KEY" 
+          echo "$ENDPOINTS_API_KEY" | gh secret set ENDPOINTS_API_KEY --env "$CURRENT_ENV"
           
         env:
           GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
