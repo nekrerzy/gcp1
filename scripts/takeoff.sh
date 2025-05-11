@@ -1442,30 +1442,16 @@ run_workflow() {
   # Check prerequisites
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   
-  # Try to find a matching workflow file in the repository
-  log_info "Looking for relevant workflow files..."
-  
-  local workflow_name=""
-  local matching_workflows=$(gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -E "(Deploy|Infrastructure|Terraform|GCP)" | head -1)
-  
-  if [ -n "$matching_workflows" ]; then
-    workflow_name=$(echo "$matching_workflows" | awk '{print $1}')
-    log_info "Found matching workflow: $workflow_name"
-  else
-    log_warning "No matching infrastructure workflow found"
-    log_info "Available workflows:"
-    gh workflow list -R "$USER_REPO_PATH"
-    
-    read -e -p "Enter workflow name to run (or leave empty to skip): " workflow_name
-    if [ -z "$workflow_name" ]; then
-      log_info "Skipping workflow execution"
-      return 0
-    fi
+  # Check if workflow exists
+  if ! gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -q "Deploy Google Cloud Infrastructure"; then
+    log_warning "Workflow 'Deploy Google Cloud Infrastructure' not found"
+    log_info "Please ensure the workflow file has been pushed to the repository"
+    return 1
   fi
   
   # Run workflow
-  log_info "Starting '$workflow_name' workflow..."
-  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH" --ref main; then
+  log_info "Starting 'Deploy Google Cloud Infrastructure' workflow..."
+  if ! gh workflow run "Deploy Google Cloud Infrastructure" -R "$USER_REPO_PATH"; then
     log_error "Failed to start workflow"
     return 1
   fi
@@ -1475,7 +1461,7 @@ run_workflow() {
   # Ask to monitor progress
   read -e -p "Monitor workflow progress? (Y/n): " monitor
   if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
-    monitor_workflow "$workflow_name" || {
+    monitor_workflow "Deploy Google Cloud Infrastructure" || {
       log_warning "Workflow did not complete successfully"
       return 1
     }
@@ -1486,51 +1472,40 @@ run_workflow() {
   return 0
 }
 
-run_app_workflow() {
-  log_step "Running Application CI/CD workflow"
+run_app_ci_workflow() {
+  local workflow_name="Application CI/CD"
+
+  log_step "Running GitHub workflow: $workflow_name"
 
   # Check prerequisites
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
 
-  # Try to find a matching application workflow file
-  log_info "Looking for application deployment workflow files..."
-  
-  local workflow_name=""
-  local matching_workflows=$(gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -E "(App|Application|CI/CD|Deploy App)" | head -1)
-  
-  if [ -n "$matching_workflows" ]; then
-    workflow_name=$(echo "$matching_workflows" | awk '{print $1}')
-    log_info "Found matching application workflow: $workflow_name"
-  else
-    log_warning "No matching application workflow found"
-    log_info "Available workflows:"
-    gh workflow list -R "$USER_REPO_PATH"
-    
-    read -e -p "Enter application workflow name to run (or leave empty to skip): " workflow_name
-    if [ -z "$workflow_name" ]; then
-      log_info "Skipping application workflow execution"
-      return 0
-    fi
+  # Check if workflow exists
+  if ! gh workflow list -R "$USER_REPO_PATH" \
+       | grep -qF "$workflow_name"; then
+    log_warning "Workflow '$workflow_name' not found"
+    log_info    "Please ensure the workflow file has been pushed to the repository"
+    return 1
   fi
 
   # Run workflow
   log_info "Starting '$workflow_name' workflow..."
-  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH" --ref main; then
+  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH"; then
     log_error "Failed to start workflow"
     return 1
   fi
 
-  log_info "Application workflow started successfully"
+  log_info "Workflow started successfully"
 
   # Ask to monitor progress
-  read -e -p "Monitor application workflow progress? (Y/n): " monitor
+  read -e -p "Monitor '$workflow_name' progress? (Y/n): " monitor
   if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
     monitor_workflow "$workflow_name" || {
-      log_warning "Application workflow did not complete successfully"
+      log_warning "Workflow did not complete successfully"
       return 1
     }
   else
-    log_info "You can check the application workflow status in the GitHub Actions tab"
+    log_info "You can check the workflow status in the GitHub Actions tab"
   fi
 
   return 0

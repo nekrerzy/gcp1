@@ -137,6 +137,7 @@ jobs:
 
   gcloud-auth:
     name: Google Auth
+    environment: dev
     runs-on: ubuntu-latest
     steps:
     - uses: 'actions/checkout@v4'
