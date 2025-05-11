@@ -4,22 +4,23 @@
 # GCP Deployment Script
 # 
 # A modular script for setting up and deploying to Google Cloud Platform
+# with GitHub Actions integration and multiple environment support
 ################################################################################
 
 set -e  # Exit on errors
 
 ###################### CONFIGURATION AND GLOBALS ###############################
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="2.0.0"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." &> /dev/null && pwd)
-CONFIG_YAML="$REPO_ROOT/takeoff_config.yaml"
 ENV_FILE="./.env"
 
-# Default settings - can be overridden in config
+# Default settings - used when GitHub variables don't exist
 DEFAULT_GCP_REGION="us-central1"
 DEFAULT_GCP_ZONE="us-central1-a"
 DEFAULT_NETWORKING_OPTION="create_new"
+DEFAULT_ENV="dev"
 
 # User repository details - will be set after GitHub auth
 USER_REPO_PATH=""
@@ -94,8 +95,6 @@ cleanup() {
 
 trap cleanup EXIT
 
-
-
 ###################### ENVIRONMENT PLAN ######################################
 
 display_script_overview() {
@@ -111,21 +110,22 @@ display_script_overview() {
   
   1. Check and install required dependencies
   2. Authenticate with GitHub and set your repository
-  3. Authenticate with GCP and select/create a project
-  4. Select to use an existing VPC or create a new one
-  5. Select to use an existing subnet or create a new one
-  6. Set up Terraform state storage in GCP
-  7. Configure GitHub Actions integration with GCP:
+  3. Select or create a target environment (dev/staging/prod)
+  4. Authenticate with GCP and select/create a project
+  5. Select to use an existing VPC or create a new one
+  6. Select to use an existing subnet or create a new one
+  7. Set up Terraform state storage in GCP
+  8. Configure GitHub Actions integration with GCP:
      - Create service account for GitHub Actions
      - Set up Workload Identity Federation (recommended)
      - Configure GitHub repository secrets and variables
-  8. Trigger infrastructure deployment workflow
-  9. Optionally deploy your application
+  9. Trigger infrastructure deployment workflow
+  10. Optionally deploy your application
 
   PREREQUISITES:
   - GitHub repository with all necessary files
   - A Google account with owner access to GCP
-  - Basic understanding of GCP/Terraform resources (recomended)
+  - Basic understanding of GCP/Terraform resources (recommended)
 
   Press Ctrl+C at any time to cancel the process.
 EOT
@@ -139,11 +139,6 @@ EOT
   
   echo
 }
-
-# Call this function immediately after script starts
-# Add this line right after the globals section, before the main execution
-
-
 
 ###################### DEPENDENCY MANAGEMENT ##################################
 
@@ -208,7 +203,7 @@ install_dependencies() {
   # Define dependency array
   declare -A dependencies
   
-  # Format: [command_name]="install_message|install_command"
+  # Format: [command_name]="install_message|install_function"
   dependencies["gcloud"]="Installing Google Cloud SDK...|install_gcloud"
   dependencies["gh"]="Installing GitHub CLI...|install_gh"
   dependencies["yq"]="Installing yq...|install_yq"
@@ -325,8 +320,6 @@ install_jq() {
   return 0
 }
 
-
-
 ###################### GITHUB INTEGRATION #####################################
 
 check_github_auth() {
@@ -354,16 +347,63 @@ check_github_auth() {
   return 0
 }
 
+create_github_environment() {
+  local env_name=$1
+  local repo_name=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+  
+  log_info "Checking if environment '$env_name' exists in repository..."
+  
+  # Check if environment already exists
+  if gh api repos/${repo_name}/environments | grep -q "\"name\":\"$env_name\""; then
+    log_info "Environment '$env_name' already exists. Skipping creation."
+    return 0
+  fi
+  
+  log_info "Creating GitHub environment: $env_name"
+  
+  # Create the environment using GitHub API
+  if gh api -X PUT repos/${repo_name}/environments/$env_name; then
+    log_info "Successfully created GitHub environment: $env_name"
+    
+    # Configure environment protection rules based on environment type
+    case "$env_name" in
+      prod)
+        # Try to set up protection rules for production environment
+        gh api -X PUT repos/${repo_name}/environments/$env_name \
+          -f deployment_branch_policy[protected_branches]=true \
+          -f deployment_branch_policy[custom_branch_policies]=false \
+          && log_info "Set up protection rules for production environment"
+        ;;
+      staging)
+        # Set up basic protection for staging
+        gh api -X PUT repos/${repo_name}/environments/$env_name \
+          -f deployment_branch_policy[protected_branches]=false \
+          -f deployment_branch_policy[custom_branch_policies]=true \
+          -f deployment_branch_policy.custom_branch_policies[0].name='main' \
+          -f deployment_branch_policy.custom_branch_policies[1].name='staging-*' \
+          && log_info "Set up protection rules for staging environment"
+        ;;
+      dev)
+        # Minimal protection for dev environment
+        log_info "No special protection rules set for dev environment"
+        ;;
+    esac
+    
+    return 0
+  else
+    log_error "Failed to create GitHub environment: $env_name"
+    return 1
+  fi
+}
+
 select_user_repository() {
   log_step "Selecting your GitHub repository"
   
-  # Get list of repositories the user has access to
-  log_info "Fetching your GitHub repositories..."
+  # Get repository from git config
   USER_REPO_URL=$(git config --get remote.origin.url)
   USER_REPO_PATH=$(gh repo view --json nameWithOwner -q ".nameWithOwner")
   
-  
-  if [ -z $USER_REPO_URL ] || [ -z $USER_REPO_PATH ]; then
+  if [ -z "$USER_REPO_URL" ] || [ -z "$USER_REPO_PATH" ]; then
     log_warning "Not in a git repository. Please create or clone a repository first."
     return 1
   fi
@@ -379,128 +419,1120 @@ select_user_repository() {
   return 0
 }
 
-set_github_variable() {
-  local name="$1"
-  local value="$2"
+get_github_variable() {
+  local var_name="$1"
+  local env_name="$2"  # Optional environment parameter
   
-  [ -z "$value" ] && { log_debug "Skipping empty $name - nothing to set"; return 0; }
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   [ -z "$GITHUB_TOKEN" ] && export GITHUB_TOKEN=$(gh auth token)
   [ -z "$GITHUB_TOKEN" ] && { log_error "No GitHub token available"; return 1; }
   
-  if ! GH_TOKEN="$GITHUB_TOKEN" gh variable set "$name" --body "$value" -R "$USER_REPO_PATH" 2>/dev/null; then
-    log_error "Failed to set $name"
-    return 1
+  local env_flag=""
+  if [ -n "$env_name" ]; then
+    env_flag="--env $env_name"
   fi
   
-  log_debug "Set GitHub variable: $name"
+  value=$(GH_TOKEN="$GITHUB_TOKEN" gh variable get "$var_name" -R "$USER_REPO_PATH" $env_flag 2>/dev/null)
+  echo "$value"
   return 0
+}
+
+set_github_variable() {
+  local var_name="$1"
+  local var_value="$2"
+  local env_name="$3"  # Optional environment parameter
+  
+  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
+  [ -z "$GITHUB_TOKEN" ] && export GITHUB_TOKEN=$(gh auth token)
+  [ -z "$GITHUB_TOKEN" ] && { log_error "No GitHub token available"; return 1; }
+  
+  local env_flag=""
+  local scope_log="repository"
+  
+  # If an environment was specified, use the --env flag
+  if [ -n "$env_name" ]; then
+    env_flag="--env $env_name"
+    scope_log="environment $env_name"
+  fi
+  
+  log_info "Setting variable $var_name in $scope_log"
+  
+  if GH_TOKEN="$GITHUB_TOKEN" gh variable set "$var_name" -R "$USER_REPO_PATH" $env_flag -b"$var_value"; then
+    log_info "Successfully set variable: $var_name in $scope_log"
+    return 0
+  else
+    log_error "Failed to set variable: $var_name in $scope_log"
+    return 1
+  fi
 }
 
 set_github_secret() {
   local name="$1"
   local value="$2"
+  local env_name="$3"  # Optional environment parameter
   
   [ -z "$value" ] && { log_debug "Skipping empty $name - nothing to set"; return 0; }
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   [ -z "$GITHUB_TOKEN" ] && export GITHUB_TOKEN=$(gh auth token)
   [ -z "$GITHUB_TOKEN" ] && { log_error "No GitHub token available"; return 1; }
   
-  if ! GH_TOKEN="$GITHUB_TOKEN" gh secret set "$name" -b"$value" -R "$USER_REPO_PATH" 2>/dev/null; then
-    log_error "Failed to set secret $name"
+  local env_flag=""
+  local scope_log="repository"
+  
+  # If an environment was specified, use the --env flag
+  if [ -n "$env_name" ]; then
+    env_flag="--env $env_name"
+    scope_log="environment $env_name"
+  fi
+  
+  if ! GH_TOKEN="$GITHUB_TOKEN" gh secret set "$name" -b"$value" -R "$USER_REPO_PATH" $env_flag 2>/dev/null; then
+    log_error "Failed to set secret $name in $scope_log"
     return 1
   fi
   
-  log_debug "Set GitHub secret: $name"
+  log_debug "Set GitHub secret: $name in $scope_log"
   return 0
 }
 
 check_github_variable() {
   local var_name="$1"
+  local env_name="$2"  # Optional environment parameter
   
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   [ -z "$GITHUB_TOKEN" ] && export GITHUB_TOKEN=$(gh auth token)
   [ -z "$GITHUB_TOKEN" ] && { log_error "No GitHub token available"; return 1; }
   
-  if output=$(GH_TOKEN="$GITHUB_TOKEN" gh variable list -R "$USER_REPO_PATH" 2>&1); then
-    echo "$output" | grep -q "^$var_name[[:space:]]" && return 0 || return 1
+  local env_flag=""
+  local scope_log="repository"
+  
+  # If an environment was specified, use the --env flag
+  if [ -n "$env_name" ]; then
+    env_flag="--env $env_name"
+    scope_log="environment $env_name"
+  fi
+  
+  log_debug "Checking if variable $var_name exists in $scope_log"
+  
+  if output=$(GH_TOKEN="$GITHUB_TOKEN" gh variable list -R "$USER_REPO_PATH" $env_flag 2>&1); then
+    if echo "$output" | grep -q "^$var_name[[:space:]]"; then
+      log_debug "Variable $var_name exists in $scope_log"
+      return 0
+    else
+      log_debug "Variable $var_name does not exist in $scope_log"
+      return 1
+    fi
   else
-    log_error "Failed to check variable: $var_name"
+    log_error "Failed to check variable: $var_name in $scope_log"
     return 1
   fi
 }
 
 setup_github_actions_token() {
-  log_step "Setting up GitHub Actions token"
+  log_step "Setting up GitHub tokens for environment: $ENVIRONMENT"
   
   # Check GitHub token
   [ -z "$GITHUB_TOKEN" ] && export GITHUB_TOKEN=$(gh auth token)
   [ -z "$GITHUB_TOKEN" ] && { log_error "No GitHub token available"; return 1; }
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   
-  # Check if token already exists
-  if GH_TOKEN="$GITHUB_TOKEN" gh secret list -R "$USER_REPO_PATH" 2>/dev/null | grep -q "GHACTIONS_TOKEN"; then
-    log_info "GHACTIONS_TOKEN already exists"
-    return 0
+  # First, set the token at repository level (global)
+  log_info "Setting up repository-level token..."
+  if ! GH_TOKEN="$GITHUB_TOKEN" gh secret list -R "$USER_REPO_PATH" 2>/dev/null | grep -q "GHACTIONS_TOKEN"; then
+    log_info "Creating repository-level GHACTIONS_TOKEN..."
+    if ! GH_TOKEN="$GITHUB_TOKEN" gh secret set GHACTIONS_TOKEN -b"$GITHUB_TOKEN" -R "$USER_REPO_PATH"; then
+      log_error "Failed to set repository-level GHACTIONS_TOKEN"
+      return 1
+    fi
+    log_info "Repository-level GHACTIONS_TOKEN set successfully"
+  else
+    log_info "Repository-level GHACTIONS_TOKEN already exists"
   fi
   
-  # Set the token
-  log_info "Creating GHACTIONS_TOKEN..."
-  if ! GH_TOKEN="$GITHUB_TOKEN" gh secret set GHACTIONS_TOKEN -b"$GITHUB_TOKEN" -R "$USER_REPO_PATH"; then
-    log_error "Failed to set GHACTIONS_TOKEN"
-    return 1
-  fi
+  # Now set environment-specific secrets
+  log_info "Setting up environment-specific secrets for: $ENVIRONMENT"
   
-  log_info "GHACTIONS_TOKEN set successfully"
+  # Define environment-specific variables based on the environment
+  declare -A env_secrets
+  
+  # Common secrets for all environments
+  env_secrets["GHACTIONS_TOKEN"]="$GITHUB_TOKEN"
+  
+  # Environment-specific secrets
+  case "$ENVIRONMENT" in
+    prod)
+      env_secrets["DEPLOY_URL"]="https://production.example.com"
+      env_secrets["PRODUCTION_MODE"]="true"
+      env_secrets["LOG_LEVEL"]="error"
+      ;;
+    staging)
+      env_secrets["DEPLOY_URL"]="https://staging.example.com"
+      env_secrets["PRODUCTION_MODE"]="false"
+      env_secrets["LOG_LEVEL"]="warn"
+      ;;
+    dev)
+      env_secrets["DEPLOY_URL"]="https://dev.example.com"
+      env_secrets["PRODUCTION_MODE"]="false"
+      env_secrets["LOG_LEVEL"]="debug"
+      ;;
+  esac
+  
+  # Set each secret for the specific environment
+  for secret_name in "${!env_secrets[@]}"; do
+    secret_value="${env_secrets[$secret_name]}"
+    
+    log_info "Setting $secret_name for environment $ENVIRONMENT..."
+    if ! GH_TOKEN="$GITHUB_TOKEN" gh secret set "$secret_name" -b"$secret_value" -R "$USER_REPO_PATH" --env "$ENVIRONMENT"; then
+      log_error "Failed to set $secret_name for environment $ENVIRONMENT"
+      return 1
+    fi
+    log_info "Set $secret_name for environment $ENVIRONMENT"
+  done
+  
+  log_info "All secrets configured successfully for environment: $ENVIRONMENT"
   return 0
 }
 
-sync_github_variables() {
-  log_step "Syncing config with GitHub"
+###################### AUTHENTICATION MANAGEMENT ##############################
+
+check_gcp_auth() {
+  log_step "Checking GCP authentication"
   
-  # Ensure we have a config and GitHub auth
-  [ ! -f "$CONFIG_YAML" ] && { log_error "Config file not found"; return 1; }
+  # Check if already authenticated
+  if gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q "@"; then
+    local current_account=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null)
+    log_info "Authenticated as $current_account"
+    
+    # Check if active project is set
+    local current_project=$(gcloud config get-value project 2>/dev/null)
+    if [[ -n "$current_project" ]]; then
+      log_info "Current project: $current_project"
+      
+      # Check if a project is already defined in GitHub environment
+      local env_project=$(get_github_variable "GCP_PROJECT_ID" "$ENVIRONMENT")
+      
+      if [[ -n "$env_project" ]]; then
+        log_info "Found project ID in GitHub environment: $env_project"
+        
+        # Ask about changing projects if they differ
+        if [[ "$current_project" != "$env_project" ]]; then
+          log_warning "Current GCP project differs from GitHub environment variable"
+          read -e -p "Use GitHub environment project ($env_project)? (Y/n): " use_env_project
+          if [[ ! "$use_env_project" =~ ^[Nn]$ ]]; then
+            gcloud config set project "$env_project"
+            export GCP_PROJECT=$env_project
+            log_info "Set active project to GitHub environment project: $env_project"
+          else
+            read -e -p "Use current GCP project ($current_project)? (Y/n): " use_current_project
+            if [[ ! "$use_current_project" =~ ^[Nn]$ ]]; then
+              export GCP_PROJECT=$current_project
+              set_github_variable "GCP_PROJECT_ID" "$current_project" "$ENVIRONMENT"
+              log_info "Updated GitHub environment variable with current project: $current_project"
+            else
+              select_gcp_project || return 1
+            fi
+          fi
+        else
+          export GCP_PROJECT=$current_project
+          log_info "Using project: $current_project (matches GitHub environment)"
+        fi
+      else
+        # No project in GitHub environment, ask about current project
+        read -e -p "Use current project ($current_project)? (Y/n): " use_current
+        if [[ ! "$use_current" =~ ^[Nn]$ ]]; then
+          export GCP_PROJECT=$current_project
+          set_github_variable "GCP_PROJECT_ID" "$current_project" "$ENVIRONMENT"
+          log_info "Set GitHub environment variable GCP_PROJECT_ID to: $current_project"
+        else
+          select_gcp_project || return 1
+        fi
+      fi
+    else
+      log_warning "No active project set"
+      select_gcp_project || return 1
+    fi
+  else
+    log_warning "Not logged in to Google Cloud"
+    gcloud auth login || return 1
+    log_info "Authentication successful"
+    select_gcp_project || return 1
+  fi
+  
+  # Check application default credentials
+  if [ ! -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
+    log_warning "Setting up Application Default Credentials"
+    gcloud auth application-default login || return 1
+  else
+    log_debug "Application Default Credentials configured"
+  fi
+  
+  return 0
+}
+
+select_gcp_project() {
+  log_step "Selecting GCP project"
+  
+  # Check if project already defined in GitHub environment
+  local env_project=$(get_github_variable "GCP_PROJECT_ID" "$ENVIRONMENT")
+  if [[ -n "$env_project" ]]; then
+    log_info "Found project ID in GitHub environment: $env_project"
+    read -e -p "Use this project? (Y/n): " use_env_project
+    if [[ ! "$use_env_project" =~ ^[Nn]$ ]]; then
+      gcloud config set project "$env_project"
+      export GCP_PROJECT=$env_project
+      log_info "Set active project to: $env_project"
+      return 0
+    fi
+  fi
+  
+  # Check if repo name should be used for project
+  local repo_short_name=""
+  if [ -n "$USER_REPO_PATH" ]; then
+    repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
+    
+    if gcloud projects describe "$repo_short_name" &>/dev/null; then
+      log_info "Found matching project: $repo_short_name"
+      read -e -p "Use this project? (Y/n): " use_repo_project
+      if [[ ! "$use_repo_project" =~ ^[Nn]$ ]]; then
+        gcloud config set project "$repo_short_name"
+        export GCP_PROJECT=$repo_short_name
+        set_github_variable "GCP_PROJECT_ID" "$repo_short_name" "$ENVIRONMENT"
+        log_info "Set active project to: $repo_short_name"
+        return 0
+      fi
+    fi
+  fi
+  
+  # Get list of projects
+  log_info "Fetching GCP projects..."
+  local projects=$(gcloud projects list --format="value(projectId)")
+  
+  if [ -z "$projects" ]; then
+    log_warning "No projects found"
+    read -e -p "Create a new project? (Y/n): " create_new
+    if [[ ! "$create_new" =~ ^[Nn]$ ]]; then
+      create_gcp_project || return 1
+    else
+      log_error "No projects available"
+      return 1
+    fi
+    return 0
+  fi
+  
+  # Display projects for selection
+  echo -e "\nAvailable projects:"
+  local i=1
+  local project_array=()
+  
+  while read -r project; do
+    echo "  $i) $project"
+    project_array+=("$project")
+    ((i++))
+  done <<< "$projects"
+  
+  echo "  $i) Create a new project"
+  
+  # Select project
+  read -e -p "Select a project (1-$i): " project_choice
+  
+  if [ "$project_choice" -eq "$i" ]; then
+    create_gcp_project || return 1
+  elif [ "$project_choice" -ge 1 ] && [ "$project_choice" -lt "$i" ]; then
+    local selected=${project_array[$((project_choice-1))]}
+    gcloud config set project "$selected"
+    export GCP_PROJECT=$selected
+    set_github_variable "GCP_PROJECT_ID" "$selected" "$ENVIRONMENT"
+    log_info "Set active project to: $selected"
+    log_info "Set GCP_PROJECT_ID variable in GitHub for environment: $ENVIRONMENT"
+    
+    return 0
+  else
+    log_error "Invalid selection"
+    return 1
+  fi
+}
+
+create_gcp_project() {
+  log_step "Creating new GCP project"
+  
+  # Default to repo name or prompt
+  local default_name=""
+  if [ -n "$USER_REPO_PATH" ]; then
+    default_name="${ENVIRONMENT}-$(echo "$USER_REPO_PATH" | cut -d'/' -f2)"
+  else
+    default_name="${ENVIRONMENT}-my-gcp-project-$(date +%m%d)"
+  fi
+  
+  read -e -p "Enter new project ID (default: $default_name): " project_id
+  project_id=${project_id:-$default_name}
+  
+  # Convert to lowercase and ensure valid format
+  project_id=$(echo "$project_id" | tr '[:upper:]' '[:lower:]')
+  
+  # Validate project ID
+  if ! [[ $project_id =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+    log_error "Invalid project ID format"
+    log_warning "Project ID must start with a letter, contain only lowercase letters, numbers, or hyphens, and be 6-30 characters"
+    return 1
+  fi
+  
+  # Project display name
+  read -e -p "Enter project name [default: $project_id]: " project_name
+  project_name=${project_name:-$project_id}
+  
+  # Create project
+  log_info "Creating project: $project_name ($project_id)"
+  if ! gcloud projects create "$project_id" --name="$project_name"; then
+    log_error "Failed to create project"
+    return 1
+  fi
+  
+  log_info "Project created successfully"
+  gcloud config set project "$project_id"
+  export GCP_PROJECT=$project_id
+  
+  # Update GitHub environment variable
+  set_github_variable "GCP_PROJECT_ID" "$project_id" "$ENVIRONMENT"
+  
+  # Enable required APIs
+  log_info "Enabling required APIs..."
+  gcloud services enable cloudbuild.googleapis.com \
+                       cloudresourcemanager.googleapis.com \
+                       iam.googleapis.com \
+                       compute.googleapis.com \
+                       storage.googleapis.com
+  
+  log_info "Project setup complete: $project_id"
+  return 0
+}
+
+###################### RESOURCE MANAGEMENT ###################################
+
+set_gcp_region() {
+  log_step "Configuring GCP Region"
+  
+  # Check if region already defined in GitHub environment
+  local env_region=$(get_github_variable "GCP_REGION" "$ENVIRONMENT")
+  if [[ -n "$env_region" ]]; then
+    log_info "Found region in GitHub environment: $env_region"
+    read -e -p "Use this region? (Y/n): " use_env_region
+    if [[ ! "$use_env_region" =~ ^[Nn]$ ]]; then
+      export GCP_REGION=$env_region
+      log_info "Using region from GitHub environment: $env_region"
+      return 0
+    fi
+  fi
+  
+  # Get available regions
+  log_info "Fetching GCP regions..."
+  local regions=$(gcloud compute regions list --format="value(name)")
+  
+  # Display regions for selection
+  echo -e "\nAvailable regions:"
+  local i=1
+  local region_array=()
+  
+  while read -r region; do
+    echo "  $i) $region"
+    region_array+=("$region")
+    ((i++))
+  done <<< "$regions"
+  
+  # Select region
+  local default_region_num=1  # us-central1 is usually first
+  read -e -p "Select a region (1-$((i-1)), default: $default_region_num for ${region_array[$((default_region_num-1))]}): " region_choice
+  region_choice=${region_choice:-$default_region_num}
+  
+  if [ "$region_choice" -ge 1 ] && [ "$region_choice" -lt "$i" ]; then
+    local selected=${region_array[$((region_choice-1))]}
+    export GCP_REGION=$selected
+    set_github_variable "GCP_REGION" "$selected" "$ENVIRONMENT"
+    log_info "Set region to: $selected"
+    log_info "Set GCP_REGION variable in GitHub for environment: $ENVIRONMENT"
+    
+    # Now get a zone in this region
+    set_gcp_zone "$selected"
+    
+    return 0
+  else
+    log_error "Invalid selection"
+    return 1
+  fi
+}
+
+set_gcp_zone() {
+  local region="$1"
+  log_step "Configuring GCP Zone"
+  
+  # Check if zone already defined in GitHub environment
+  local env_zone=$(get_github_variable "GCP_ZONE" "$ENVIRONMENT")
+  if [[ -n "$env_zone" ]]; then
+    log_info "Found zone in GitHub environment: $env_zone"
+    read -e -p "Use this zone? (Y/n): " use_env_zone
+    if [[ ! "$use_env_zone" =~ ^[Nn]$ ]]; then
+      export GCP_ZONE=$env_zone
+      log_info "Using zone from GitHub environment: $env_zone"
+      return 0
+    fi
+  fi
+  
+  # Get available zones in the selected region
+  log_info "Fetching zones in region $region..."
+  local zones=$(gcloud compute zones list --filter="region:( $region )" --format="value(name)")
+  
+  # Display zones for selection
+  echo -e "\nAvailable zones in $region:"
+  local i=1
+  local zone_array=()
+  
+  while read -r zone; do
+    echo "  $i) $zone"
+    zone_array+=("$zone")
+    ((i++))
+  done <<< "$zones"
+  
+  # Select zone
+  local default_zone_num=1  # First zone in region
+  read -e -p "Select a zone (1-$((i-1)), default: $default_zone_num for ${zone_array[$((default_zone_num-1))]}): " zone_choice
+  zone_choice=${zone_choice:-$default_zone_num}
+  
+  if [ "$zone_choice" -ge 1 ] && [ "$zone_choice" -lt "$i" ]; then
+    local selected=${zone_array[$((zone_choice-1))]}
+    export GCP_ZONE=$selected
+    set_github_variable "GCP_ZONE" "$selected" "$ENVIRONMENT"
+    log_info "Set zone to: $selected"
+    log_info "Set GCP_ZONE variable in GitHub for environment: $ENVIRONMENT"
+    
+    return 0
+  else
+    log_error "Invalid selection"
+    return 1
+  fi
+}
+
+scan_and_select_vpc() {
+  log_step "Scanning and selecting VPC"
+  
+  # Ensure we have a project
+  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
+  
+  # Check if networking option is already defined in GitHub environment
+  local env_networking=$(get_github_variable "NETWORKING_OPTION" "$ENVIRONMENT")
+  local env_vpc=$(get_github_variable "VPC_NAME" "$ENVIRONMENT")
+  
+  if [[ -n "$env_networking" && -n "$env_vpc" ]]; then
+    log_info "Found networking configuration in GitHub environment:"
+    log_info "Networking option: $env_networking"
+    log_info "VPC name: $env_vpc"
+    
+    read -e -p "Use this networking configuration? (Y/n): " use_env_networking
+    if [[ ! "$use_env_networking" =~ ^[Nn]$ ]]; then
+      export NETWORKING_OPTION=$env_networking
+      export VPC_NAME=$env_vpc
+      log_info "Using networking configuration from GitHub environment"
+      return 0
+    fi
+  fi
+  
+  # Check if Compute Engine API is enabled
+  if ! gcloud services list --enabled --filter="name:compute.googleapis.com" | grep -q "compute.googleapis.com"; then
+    log_info "Enabling Compute Engine API..."
+    gcloud services enable compute.googleapis.com || {
+      log_error "Failed to enable Compute Engine API"
+      return 1
+    }
+  fi
+  
+  # Scan for existing VPCs
+  log_info "Scanning for existing VPCs in project $GCP_PROJECT..."
+  local vpc_list=$(gcloud compute networks list --project="$GCP_PROJECT" --format="value(name)")
+  
+  # Check if any VPCs exist
+  if [ -z "$vpc_list" ]; then
+    log_info "No existing VPCs found in project $GCP_PROJECT"
+    read -e -p "Let Terraform create a new VPC? (Y/n): " create_vpc
+    if [[ ! "$create_vpc" =~ ^[Nn]$ ]]; then
+      export NETWORKING_OPTION="create_new"
+      export VPC_NAME="tf-${ENVIRONMENT}-vpc"
+      log_info "Set networking option to: create_new"
+      set_github_variable "NETWORKING_OPTION" "create_new" "$ENVIRONMENT"
+      set_github_variable "VPC_NAME" "$VPC_NAME" "$ENVIRONMENT"
+    else
+      log_error "No VPC available for use"
+      return 1
+    fi
+  else
+    # Display VPCs for selection
+    echo -e "\nExisting VPCs in project $GCP_PROJECT:"
+    local i=1
+    local vpc_array=()
+    
+    while read -r vpc; do
+      echo "  $i) $vpc"
+      vpc_array+=("$vpc")
+      ((i++))
+    done <<< "$vpc_list"
+    
+    echo "  $i) Let Terraform Create a new VPC"
+    
+    # Select VPC
+    read -e -p "Select a VPC (1-$i): " vpc_choice
+    
+    if [ "$vpc_choice" -eq "$i" ]; then
+      export NETWORKING_OPTION="create_new"
+      export VPC_NAME="tf-${ENVIRONMENT}-vpc"
+      log_info "Set networking option to: create_new"
+      set_github_variable "NETWORKING_OPTION" "create_new" "$ENVIRONMENT"
+      set_github_variable "VPC_NAME" "$VPC_NAME" "$ENVIRONMENT"
+    elif [ "$vpc_choice" -ge 1 ] && [ "$vpc_choice" -lt "$i" ]; then
+      local selected=${vpc_array[$((vpc_choice-1))]}
+      export NETWORKING_OPTION="use_existing"
+      export VPC_NAME="$selected"
+      log_info "Selected VPC: $selected"
+      log_info "Set networking option to: use_existing"
+      set_github_variable "NETWORKING_OPTION" "use_existing" "$ENVIRONMENT"
+      set_github_variable "VPC_NAME" "$selected" "$ENVIRONMENT"
+    else
+      log_error "Invalid selection"
+      return 1
+    fi
+  fi
+  
+  log_info "VPC selection complete"
+  return 0
+}
+
+scan_and_select_subnet() {
+  log_step "Scanning and selecting Subnet"
+  
+  # Only run if we're using an existing VPC
+  if [ "$NETWORKING_OPTION" != "use_existing" ] || [ -z "$VPC_NAME" ]; then
+    log_debug "Skipping subnet selection - not using existing VPC"
+    return 0
+  fi
+  
+  # Ensure we have a project
+  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
+  
+  # Check if subnet is already defined in GitHub environment
+  local env_subnet=$(get_github_variable "SUBNET_NAME" "$ENVIRONMENT")
+  
+  if [[ -n "$env_subnet" ]]; then
+    log_info "Found subnet in GitHub environment: $env_subnet"
+    
+    read -e -p "Use this subnet? (Y/n): " use_env_subnet
+    if [[ ! "$use_env_subnet" =~ ^[Nn]$ ]]; then
+      export SUBNET_NAME=$env_subnet
+      log_info "Using subnet from GitHub environment: $env_subnet"
+      return 0
+    fi
+  fi
+  
+  # Get region from GitHub environment or use default
+  local region=$(get_github_variable "GCP_REGION" "$ENVIRONMENT")
+  [ -z "$region" ] && region="$GCP_REGION"
+  [ -z "$region" ] && region="$DEFAULT_GCP_REGION"
+  
+  # Scan for existing subnets in the selected VPC and region
+  log_info "Scanning for existing subnets in VPC '$VPC_NAME' and region '$region'..."
+  local subnet_list=$(gcloud compute networks subnets list \
+    --project="$GCP_PROJECT" \
+    --network="$VPC_NAME" \
+    --regions="$region" \
+    --format="value(name)")
+  
+  # Check if any subnets exist
+  if [ -z "$subnet_list" ]; then
+    log_info "No existing subnets found in VPC '$VPC_NAME' in region '$region'"
+    log_warning "No subnet available for use in the selected region"
+    # Ask if they want to try another region
+    read -e -p "Try another region? (Y/n): " try_other
+    if [[ ! "$try_other" =~ ^[Nn]$ ]]; then
+      # Get available regions with subnets in this VPC
+      local regions=$(gcloud compute networks subnets list \
+        --project="$GCP_PROJECT" \
+        --network="$VPC_NAME" \
+        --format="value(region)" | sort | uniq)
+      
+      if [ -z "$regions" ]; then
+        log_error "No subnets found in any region for VPC '$VPC_NAME'"
+        return 1
+      fi
+      
+      # Display regions for selection
+      echo -e "\nRegions with subnets in VPC '$VPC_NAME':"
+      local i=1
+      local region_array=()
+      
+      while read -r reg; do
+        echo "  $i) $reg"
+        region_array+=("$reg")
+        ((i++))
+      done <<< "$regions"
+      
+      # Select region
+      read -e -p "Select a region (1-$((i-1))): " region_choice
+      
+      if [ "$region_choice" -ge 1 ] && [ "$region_choice" -lt "$i" ]; then
+        region=${region_array[$((region_choice-1))]}
+        set_github_variable "GCP_REGION" "$region" "$ENVIRONMENT"
+        export GCP_REGION=$region
+        log_info "Selected region: $region"
+        log_info "Updated GCP_REGION in GitHub environment: $ENVIRONMENT"
+        # Recursive call with new region
+        scan_and_select_subnet
+        return $?
+      else
+        log_error "Invalid selection"
+        return 1
+      fi
+    else
+      # Let Terraform create a subnet in the current region
+      export SUBNET_NAME="tf-${ENVIRONMENT}-subnet"
+      set_github_variable "SUBNET_NAME" "$SUBNET_NAME" "$ENVIRONMENT"
+      log_info "Terraform will create a new subnet"
+      return 0
+    fi
+  fi
+  
+  # Display subnets for selection
+  echo -e "\nExisting subnets in VPC '$VPC_NAME' (region '$region'):"
+  local i=1
+  local subnet_array=()
+  
+  while read -r subnet; do
+    # Get subnet details
+    local cidr=$(gcloud compute networks subnets describe "$subnet" \
+      --project="$GCP_PROJECT" \
+      --region="$region" \
+      --format="value(ipCidrRange)")
+    
+    echo "  $i) $subnet ($cidr)"
+    subnet_array+=("$subnet")
+    ((i++))
+  done <<< "$subnet_list"
+  
+  echo "  $i) Let Terraform create a new subnet"
+  
+  # Select subnet
+  read -e -p "Select a subnet (1-$i): " subnet_choice
+  
+  if [ "$subnet_choice" -eq "$i" ]; then
+    # User wants to create a new subnet
+    export SUBNET_NAME="tf-${ENVIRONMENT}-subnet"
+    set_github_variable "SUBNET_NAME" "$SUBNET_NAME" "$ENVIRONMENT"
+    log_info "Terraform will create a new subnet: $SUBNET_NAME"
+  elif [ "$subnet_choice" -ge 1 ] && [ "$subnet_choice" -lt "$i" ]; then
+    local selected=${subnet_array[$((subnet_choice-1))]}
+    export SUBNET_NAME="$selected"
+    set_github_variable "SUBNET_NAME" "$selected" "$ENVIRONMENT"
+    log_info "Selected subnet: $selected"
+    log_info "Updated SUBNET_NAME in GitHub environment: $ENVIRONMENT"
+  else
+    log_error "Invalid selection"
+    return 1
+  fi
+  
+  log_info "Subnet selection complete"
+  return 0
+}
+
+setup_terraform_storage() {
+  log_step "Setting up Terraform storage"
+  
+  # Ensure we have a project
+  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
+  
+  # Check if bucket already defined in GitHub environment
+  local env_bucket=$(get_github_variable "BACKEND_STORAGE_ACCOUNT" "$ENVIRONMENT")
+  
+  if [[ -n "$env_bucket" ]]; then
+    log_info "Found storage bucket in GitHub environment: $env_bucket"
+    
+    if gsutil ls -p "$GCP_PROJECT" "gs://$env_bucket" &>/dev/null; then
+      log_info "Bucket gs://$env_bucket exists"
+      read -e -p "Use this bucket? (Y/n): " use_env_bucket
+      if [[ ! "$use_env_bucket" =~ ^[Nn]$ ]]; then
+        export BUCKET_NAME=$env_bucket
+        log_info "Using bucket from GitHub environment: $env_bucket"
+        return 0
+      fi
+    else
+      log_warning "Bucket gs://$env_bucket does not exist in project $GCP_PROJECT"
+    fi
+  fi
+  
+  # Get region from GitHub environment
+  local region=$(get_github_variable "GCP_REGION" "$ENVIRONMENT")
+  [ -z "$region" ] && region="$GCP_REGION"
+  [ -z "$region" ] && region="$DEFAULT_GCP_REGION"
+  
+  # Create new bucket name
+  if [ -n "$USER_REPO_PATH" ]; then
+    local repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+    BUCKET_NAME="${ENVIRONMENT}-${repo_short_name}-tfstate-$GCP_PROJECT"
+  else
+    BUCKET_NAME="${ENVIRONMENT}-${GCP_PROJECT}-tfstate"
+  fi
+  
+  # Ensure bucket name is lowercase and valid
+  BUCKET_NAME=$(echo "$BUCKET_NAME" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+  BUCKET_NAME=$(echo "$BUCKET_NAME" | cut -c 1-60)  # Limit length
+  
+  log_info "Using bucket name: $BUCKET_NAME"
+  
+  if gsutil ls -p "$GCP_PROJECT" "gs://$BUCKET_NAME" &>/dev/null; then
+    log_info "Bucket gs://$BUCKET_NAME already exists"
+  else
+    # Create the bucket
+    log_info "Creating bucket gs://$BUCKET_NAME in $region"
+    if ! gsutil mb -p "$GCP_PROJECT" -l "$region" "gs://$BUCKET_NAME"; then
+      log_error "Failed to create bucket"
+      return 1
+    fi
+    
+    # Enable versioning
+    log_info "Enabling versioning"
+    gsutil versioning set on "gs://$BUCKET_NAME"
+    
+    # Set lifecycle policy
+    log_info "Setting lifecycle management"
+    cat > "/tmp/lifecycle.json" << EOL
+{
+  "rule": [
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "numNewerVersions": 10,
+        "isLive": false
+      }
+    }
+  ]
+}
+EOL
+    gsutil lifecycle set "/tmp/lifecycle.json" "gs://$BUCKET_NAME"
+  fi
+  
+  # Set GitHub variable
+  set_github_variable "BACKEND_STORAGE_ACCOUNT" "$BUCKET_NAME" "$ENVIRONMENT"
+  log_info "Set BACKEND_STORAGE_ACCOUNT variable in GitHub for environment: $ENVIRONMENT"
+  
+  log_info "Terraform storage setup complete"
+  return 0
+}
+
+create_service_account() {
+  log_step "Creating Service Account for GitHub Actions"
+  
+  # Ensure we have a project
+  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
   [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
   
-  # Map YAML paths to GitHub variables
-  declare -A variables=(
-    [".gcp.project_id"]="GCP_PROJECT_ID"
-    [".gcp.region"]="GCP_REGION"
-    [".gcp.zone"]="GCP_ZONE"
-    [".environment.networking_option"]="NETWORKING_OPTION"
-    [".environment.vpc_name"]="VPC_NAME"
-  )
+  # Check if service account already defined in GitHub environment
+  local env_sa=$(get_github_variable "SERVICE_ACCOUNT" "$ENVIRONMENT")
   
-
-  # Set GitHub variables from config
-  local success=true
-  for yaml_path in "${!variables[@]}"; do
-    local var_name="${variables[$yaml_path]}"
-    local value=$(yq e "$yaml_path" "$CONFIG_YAML")
+  if [[ -n "$env_sa" ]]; then
+    log_info "Found service account in GitHub environment: $env_sa"
     
-    if [ "$value" != "null" ] && [ -n "$value" ]; then
-      # Always update the variable, even if it already exists
-      set_github_variable "$var_name" "$value" || success=false
-      log_info "Updated GitHub variable: $var_name with value: $value"
-    fi
-  done
-  
-  # Handle labels separately
-  local labels=$(yq e '.environment.labels' "$CONFIG_YAML" -o json --indent 0)
-  if [ "$labels" != "null" ] && [ -n "$labels" ]; then
-    if ! check_github_variable "GCP_LABELS"; then
-      set_github_variable "GCP_LABELS" "$labels" || success=false
+    # Check if service account exists in GCP
+    if gcloud iam service-accounts describe "$env_sa" &>/dev/null; then
+      log_info "Service account exists in GCP: $env_sa"
+      read -e -p "Use this service account? (Y/n): " use_env_sa
+      if [[ ! "$use_env_sa" =~ ^[Nn]$ ]]; then
+        export SERVICE_ACCOUNT=$env_sa
+        log_info "Using service account from GitHub environment: $env_sa"
+        return 0
+      fi
     else
-      log_debug "GCP_LABELS already exists"
+      log_warning "Service account does not exist in GCP: $env_sa"
     fi
   fi
   
-  if [ "$success" = true ]; then
-    log_info "GitHub variables synced successfully"
+  # Create service account name
+  local repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+  local sa_name="${repo_short_name}-gha"
+  local sa_display_name="GitHub Actions for ${repo_short_name} (${ENVIRONMENT})"
+  local sa_email="${sa_name}@${GCP_PROJECT}.iam.gserviceaccount.com"
+  
+  # Check if service account exists
+  if gcloud iam service-accounts list --filter="email:$sa_email" | grep -q "$sa_email"; then
+    log_info "Service account $sa_email already exists"
   else
-    log_warning "Some GitHub variables failed to sync"
+    # Create service account
+    log_info "Creating service account $sa_name"
+    if ! gcloud iam service-accounts create "$sa_name" \
+         --display-name="$sa_display_name" \
+         --description="Service account for GitHub Actions integration with environment: $ENVIRONMENT"; then
+      log_error "Failed to create service account"
+      return 1
+    fi
   fi
   
+  sleep 5  # Allow time for service account creation to propagate
+  
+  # Grant permissions
+  log_info "Granting permissions to service account"
+  
+  readonly ROLES=(
+    # General CRUD on resources you manage
+    roles/compute.admin            # VMs, disks, addresses, forwarding rules
+    roles/container.admin          # GKE clusters (Autopilot & Standard)
+    roles/storage.admin            # GCS buckets & objects
+    roles/cloudsql.admin           # Cloud SQL instances & users
+    roles/secretmanager.admin
+    roles/servicenetworking.networksAdmin
+    roles/artifactregistry.admin
+    roles/documentai.admin
+    roles/datastore.owner
+    roles/aiplatform.admin
+    roles/servicemanagement.admin # Service managment admin
+    roles/serviceusage.apiKeysAdmin
+    roles/dns.admin
+
+
+    # IAM administration needed by the pipeline
+    roles/iam.serviceAccountAdmin  # create/update SAs, grant them roles
+    roles/iam.securityAdmin        # set IAM policies at project/resource level
+    roles/iam.serviceAccountKeyAdmin   # (optional) manage SA keys, if you ever need them
+    roles/iam.workloadIdentityPoolAdmin # create/update WIF pools/providers
+    roles/iam.serviceAccountUser
+
+    # Enable / disable Google APIs on-the-fly
+    roles/serviceusage.serviceUsageAdmin
+  )
+
+  for role in "${ROLES[@]}"; do
+    log_debug "Granting role $role to $sa_email"
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+      --member="serviceAccount:${sa_email}" \
+      --role="$role" \
+      --quiet
+  done
+    
+  # Ask user if they want to use Workload Identity Federation (recommended) 
+  log_warning "GitHub Actions can authenticate with GCP using Workload Identity Federation"
+  read -e -p "Use Workload Identity Federation? (Y/n): " use_wif
+  
+  if [[ ! "$use_wif" =~ ^[Nn]$ ]]; then
+    # Set up Workload Identity Federation
+    setup_workload_identity_federation "$sa_email" || return 1
+  else
+    return 1
+  fi
+  
+  log_info "Service account setup complete"
+  return 0
+}
+
+setup_workload_identity_federation() {
+  local sa_email="$1"
+  local repo_owner=$(echo "$USER_REPO_PATH" | cut -d'/' -f1)
+  local repo_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
+  
+  log_step "Setting up Workload Identity Federation for GitHub Actions"
+  
+  # Check if provider already defined in GitHub environment
+  local env_provider=$(get_github_variable "WORKLOAD_IDENTITY_PROVIDER" "$ENVIRONMENT")
+  
+  if [[ -n "$env_provider" && -n "$sa_email" ]]; then
+    log_info "Found Workload Identity Provider in GitHub environment:"
+    log_info "Provider: $env_provider"
+    log_info "Service Account: $sa_email"
+    
+    read -e -p "Use this configuration? (Y/n): " use_env_provider
+    if [[ ! "$use_env_provider" =~ ^[Nn]$ ]]; then
+      export WORKLOAD_IDENTITY_PROVIDER=$env_provider
+      export SERVICE_ACCOUNT=$sa_email
+      log_info "Using Workload Identity Federation configuration from GitHub environment"
+      return 0
+    fi
+  fi
+  
+  # Enable required APIs
+  log_info "Enabling IAM Credentials API..."
+  gcloud services enable iamcredentials.googleapis.com
+  gcloud services enable cloudresourcemanager.googleapis.com
+  
+  # Create Workload Identity Pool if it doesn't exist
+  local pool_id="github-actions-pool"
+  local pool_display_name="GitHub Actions Pool"
+
+  if gcloud iam workload-identity-pools list --location="global" | grep -q "$pool_id"; then
+    log_info "Workload Identity Pool $pool_id already exists"
+  else
+    log_info "Creating Workload Identity Pool..."
+    if ! gcloud iam workload-identity-pools create "$pool_id" \
+         --location="global" \
+         --display-name="$pool_display_name" \
+         --description="Identity pool for GitHub Actions"; then
+      log_error "Failed to create Workload Identity Pool"
+      return 1
+    fi
+  fi
+  
+  sleep 3  # Allow time for pool creation to propagate
+  
+  # Get workload identity pools and project number
+  local pool_list=$(gcloud iam workload-identity-pools list --location="global" --format="value(name)")
+  if [ -z "$pool_list" ]; then
+    log_error "No workload identity pools found"
+    return 1
+  fi
+
+  # Use the specific provider
+  local PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format="value(projectNumber)")
+  local pool_name="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$pool_id"
+  log_info "Using pool: $pool_name"
+  
+  # Create Workload Identity Provider for GitHub Actions
+  local provider_id="github-provider"
+  local provider_display_name="GitHub Provider"
+  
+  if gcloud iam workload-identity-pools providers list \
+       --workload-identity-pool="$pool_id" \
+       --location="global" | grep -q "$provider_id"; then
+    log_info "Workload Identity Provider $provider_id already exists"
+  else
+    log_info "Creating Workload Identity Provider..."
+    if ! gcloud iam workload-identity-pools providers create-oidc "$provider_id" \
+         --workload-identity-pool="$pool_id" \
+         --location="global" \
+         --display-name="$provider_display_name" \
+         --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+         --attribute-condition="attribute.repository=='${repo_owner}/${repo_name}'" \
+         --issuer-uri="https://token.actions.githubusercontent.com"; then
+      log_error "Failed to create Workload Identity Provider"
+      return 1
+    fi
+  fi
+  
+  sleep 3  # Allow time for provider creation to propagate
+  
+  # Allow authentications from the specified repository to impersonate the service account
+  log_info "Setting up IAM policy binding..."
+  
+  if ! gcloud iam service-accounts add-iam-policy-binding "$sa_email" \
+       --role="roles/iam.workloadIdentityUser" \
+       --member="principalSet://iam.googleapis.com/${pool_name}/attribute.repository/${repo_owner}/${repo_name}"; then
+    log_error "Failed to add IAM policy binding"
+    return 1
+  fi
+  
+  # Get provider name for GitHub Actions
+  local provider_name="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$pool_id/providers/$provider_id"
+  
+  # Set GitHub variables for Workload Identity Federation
+  set_github_variable "WORKLOAD_IDENTITY_PROVIDER" "$provider_name" "$ENVIRONMENT"
+  set_github_variable "SERVICE_ACCOUNT" "$sa_email" "$ENVIRONMENT"
+  
+  log_info "Workload Identity Federation setup complete"
+  log_info "GitHub workflow will use the following configuration:"
+  echo -e "Workload Identity Provider: ${CYAN}$provider_name${NC}"
+  echo -e "Service Account: ${CYAN}$sa_email${NC}"
+  
+  return 0
+}
+
+###################### WORKFLOW MANAGEMENT ###################################
+
+run_workflow() {
+  log_step "Running GitHub workflow"
+  
+  # Check prerequisites
+  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
+  
+  # Try to find a matching workflow file in the repository
+  log_info "Looking for relevant workflow files..."
+  
+  local workflow_name=""
+  local matching_workflows=$(gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -E "(Deploy|Infrastructure|Terraform|GCP)" | head -1)
+  
+  if [ -n "$matching_workflows" ]; then
+    workflow_name=$(echo "$matching_workflows" | awk '{print $1}')
+    log_info "Found matching workflow: $workflow_name"
+  else
+    log_warning "No matching infrastructure workflow found"
+    log_info "Available workflows:"
+    gh workflow list -R "$USER_REPO_PATH"
+    
+    read -e -p "Enter workflow name to run (or leave empty to skip): " workflow_name
+    if [ -z "$workflow_name" ]; then
+      log_info "Skipping workflow execution"
+      return 0
+    fi
+  fi
+  
+  # Run workflow
+  log_info "Starting '$workflow_name' workflow..."
+  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH" --ref main; then
+    log_error "Failed to start workflow"
+    return 1
+  fi
+  
+  log_info "Workflow started successfully"
+  
+  # Ask to monitor progress
+  read -e -p "Monitor workflow progress? (Y/n): " monitor
+  if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
+    monitor_workflow "$workflow_name" || {
+      log_warning "Workflow did not complete successfully"
+      return 1
+    }
+  else
+    log_info "You can check the workflow status in the GitHub Actions tab"
+  fi
+  
+  return 0
+}
+
+run_app_workflow() {
+  log_step "Running Application CI/CD workflow"
+
+  # Check prerequisites
+  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
+
+  # Try to find a matching application workflow file
+  log_info "Looking for application deployment workflow files..."
+  
+  local workflow_name=""
+  local matching_workflows=$(gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -E "(App|Application|CI/CD|Deploy App)" | head -1)
+  
+  if [ -n "$matching_workflows" ]; then
+    workflow_name=$(echo "$matching_workflows" | awk '{print $1}')
+    log_info "Found matching application workflow: $workflow_name"
+  else
+    log_warning "No matching application workflow found"
+    log_info "Available workflows:"
+    gh workflow list -R "$USER_REPO_PATH"
+    
+    read -e -p "Enter application workflow name to run (or leave empty to skip): " workflow_name
+    if [ -z "$workflow_name" ]; then
+      log_info "Skipping application workflow execution"
+      return 0
+    fi
+  fi
+
+  # Run workflow
+  log_info "Starting '$workflow_name' workflow..."
+  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH" --ref main; then
+    log_error "Failed to start workflow"
+    return 1
+  fi
+
+  log_info "Application workflow started successfully"
+
+  # Ask to monitor progress
+  read -e -p "Monitor application workflow progress? (Y/n): " monitor
+  if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
+    monitor_workflow "$workflow_name" || {
+      log_warning "Application workflow did not complete successfully"
+      return 1
+    }
+  else
+    log_info "You can check the application workflow status in the GitHub Actions tab"
+  fi
+
   return 0
 }
 
@@ -550,836 +1582,10 @@ monitor_workflow() {
   [ "$conclusion" == "success" ] && return 0 || return 1
 }
 
-###################### CONFIGURATION MANAGEMENT ###############################
-
-create_config_yaml() {
-  if [ -f "$CONFIG_YAML" ]; then
-    log_info "Config file already exists at $CONFIG_YAML"
-    return 0
-  fi
-  
-  log_step "Creating configuration file"
-  
-  # We already have repository details from GitHub auth
-  if [ -z "$USER_REPO_PATH" ]; then
-    log_error "No repository selected. Please authenticate with GitHub first."
-    return 1
-  fi
-  
-  # Use previously gathered information if available
-  local project_id=${GCP_PROJECT:-""}
-  local networking_option=${NETWORKING_OPTION:-"$DEFAULT_NETWORKING_OPTION"}
-  local vpc_name=${VPC_NAME:-""}
-  local subnet_name=${SUBNET_NAME:-""}
-  local enviroment=${ENVIRONMENT:-""}
-  
-  # Get region if not set
-  local gcp_region=""
-  if [ -n "$TF_VAR_location" ]; then
-    gcp_region=$TF_VAR_location
-  else
-    read -e -p "Enter your desired GCP region (default: $DEFAULT_GCP_REGION): " input_region
-    gcp_region=${input_region:-$DEFAULT_GCP_REGION}
-  fi
-  
-  # Get zone if not set
-  local gcp_zone=""
-  if [ -n "$TF_VAR_zone" ]; then
-    gcp_zone=$TF_VAR_zone
-  else
-    read -e -p "Enter your desired GCP zone (default: $DEFAULT_GCP_ZONE): " input_zone
-    gcp_zone=${input_zone:-$DEFAULT_GCP_ZONE}
-  fi
-  
-  # Create config file with gathered values
-  mkdir -p $(dirname "$CONFIG_YAML")
-  cat > "$CONFIG_YAML" << EOL
-# GCP Deployment Configuration
-
-gcp:
-  project_id: "$project_id"
-  region: "$gcp_region"
-  zone: "$gcp_zone"
-
-github:
-  repo_name: "$USER_REPO_PATH"
-
-environment:
-  env_name: "$enviroment"
-  networking_option: "$networking_option"
-  vpc_name: "$vpc_name"
-  subnet_name: "$subnet_name"
-  labels:
-    managed-by: "terraform"
-    environment: "development"
-    team: "platform"
-EOL
-  
-  log_info "Created configuration file at $CONFIG_YAML"
-  return 0
-}
-
-validate_config() {
-  log_step "Validating configuration"
-  
-  if [ ! -f "$CONFIG_YAML" ]; then
-    log_warning "Config file not found"
-    
-  fi
-  sync_github_variables || log_warning "GitHub variable sync failed"
-  # Check required fields
-  local project_id=$(yq e '.gcp.project_id' "$CONFIG_YAML")
-  local region=$(yq e '.gcp.region' "$CONFIG_YAML")
-  local zone=$(yq e '.gcp.zone' "$CONFIG_YAML")
-  local repo_name=$(yq e '.github.repo_name' "$CONFIG_YAML")
-  local networking_option=$(yq e '.environment.networking_option' "$CONFIG_YAML")
-  local vpc_name=$(yq e '.environment.vpc_name' "$CONFIG_YAML")
-  local subnet_name=$(yq e '.environment.subnet_name' "$CONFIG_YAML")
-  local deploy_enviroment=$(yq e '.environment.env_name' "$CONFIG_YAML")
-  
-  local missing_fields=()
-  [ -z "$project_id" ] || [ "$project_id" = "null" ] && missing_fields+=("gcp.project_id")
-  [ -z "$region" ] || [ "$region" = "null" ] && missing_fields+=("gcp.region")
-  [ -z "$zone" ] || [ "$zone" = "null" ] && missing_fields+=("gcp.zone")
-  [ -z "$repo_name" ] || [ "$repo_name" = "null" ] && missing_fields+=("github.repo_name")
-  [ -z "$networking_option" ] || [ "$networking_option" = "null" ] && missing_fields+=("environment.networking_option")
-  [ -z "$deploy_enviroment" ] || [ "$deploy_enviroment" = "null" ] && missing_fields+=("environment.env_name")
-  
-  if [ "$networking_option" = "use_existing" ]; then
-    if [ -z "$vpc_name" ] || [ "$vpc_name" = "null" ]; then
-      missing_fields+=("environment.vpc_name")
-    fi
-    # We don't require subnet_name as it's optional - can be created by Terraform
-  fi
-  
-  if [ ${#missing_fields[@]} -gt 0 ]; then
-    log_warning "Missing required fields in config:"
-    for field in "${missing_fields[@]}"; do
-      log_warning "  - $field"
-    done
-    return 1
-  fi
-  
-  log_info "Configuration validated successfully"
-  return 0
-}
-
-###################### AUTHENTICATION MANAGEMENT ##############################
-
-check_gcp_auth() {
-  log_step "Checking GCP authentication"
-  
-  # Check if already authenticated
-  if gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q "@"; then
-    local current_account=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null)
-    log_info "Authenticated as $current_account"
-    
-    # Check if active project is set
-    local current_project=$(gcloud config get-value project 2>/dev/null)
-    if [[ -n "$current_project" ]]; then
-      log_info "Current project: $current_project"
-      
-      # Ask about changing projects
-      read -e -p "Use a different project? (y/N): " change_project
-      if [[ "$change_project" =~ ^[Yy]$ ]]; then
-        select_gcp_project || return 1
-      else
-        export GCP_PROJECT=$current_project
-      fi
-    else
-      log_warning "No active project set"
-      select_gcp_project || return 1
-    fi
-  else
-    log_warning "Not logged in to Google Cloud"
-    gcloud auth login || return 1
-    log_info "Authentication successful"
-    select_gcp_project || return 1
-  fi
-  
-  # Check application default credentials
-  if [ ! -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
-    log_warning "Setting up Application Default Credentials"
-    gcloud auth application-default login || return 1
-  else
-    log_debug "Application Default Credentials configured"
-  fi
-  
-  return 0
-}
-
-select_gcp_project() {
-  log_step "Selecting GCP project"
-  
-  # Check if repo name should be used for project
-  local repo_short_name=""
-  if [ -n "$USER_REPO_PATH" ]; then
-    repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
-    
-    if gcloud projects describe "$repo_short_name" &>/dev/null; then
-      log_info "Found matching project: $repo_short_name"
-      read -e -p "Use this project? (Y/n): " use_repo_project
-      if [[ ! "$use_repo_project" =~ ^[Nn]$ ]]; then
-        gcloud config set project "$repo_short_name"
-        export GCP_PROJECT=$repo_short_name
-        log_info "Set active project to: $repo_short_name"
-        return 0
-      fi
-    fi
-  fi
-  
-  # Get list of projects
-  log_info "Fetching GCP projects..."
-  local projects=$(gcloud projects list --format="value(projectId)")
-  
-  if [ -z "$projects" ]; then
-    log_warning "No projects found"
-    read -e -p "Create a new project? (Y/n): " create_new
-    if [[ ! "$create_new" =~ ^[Nn]$ ]]; then
-      create_gcp_project || return 1
-    else
-      log_error "No projects available"
-      return 1
-    fi
-    return 0
-  fi
-  
-  # Display projects for selection
-  echo -e "\nAvailable projects:"
-  local i=1
-  local project_array=()
-  
-  while read -r project; do
-    echo "  $i) $project"
-    project_array+=("$project")
-    ((i++))
-  done <<< "$projects"
-  
-  echo "  $i) Create a new project"
-  
-  # Select project
-  read -e -p "Select a project (1-$i): " project_choice
-  
-  if [ "$project_choice" -eq "$i" ]; then
-    create_gcp_project || return 1
-  elif [ "$project_choice" -ge 1 ] && [ "$project_choice" -lt "$i" ]; then
-    local selected=${project_array[$((project_choice-1))]}
-    gcloud config set project "$selected"
-    export GCP_PROJECT=$selected
-    log_info "Set active project to: $selected"
-    
-    # Update config
-    if [ -f "$CONFIG_YAML" ]; then
-      yq e -i ".gcp.project_id = \"$selected\"" "$CONFIG_YAML"
-      log_debug "Updated project ID in config"
-    fi
-    
-    return 0
-  else
-    log_error "Invalid selection"
-    return 1
-  fi
-}
-
-create_gcp_project() {
-  log_step "Creating new GCP project"
-  
-  # Default to repo name or prompt
-  local default_name=""
-  if [ -n "$USER_REPO_PATH" ]; then
-    default_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
-  else
-    default_name="my-gcp-project-$(date +%m%d)"
-  fi
-  
-  read -e -p "Enter new project ID (default: $default_name): " project_id
-  project_id=${project_id:-$default_name}
-  
-  # Validate project ID
-  if ! [[ $project_id =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
-    log_error "Invalid project ID format"
-    log_warning "Project ID must start with a letter, contain only lowercase letters, numbers, or hyphens, and be 6-30 characters"
-    return 1
-  fi
-  
-  # Project display name
-  read -e -p "Enter project name [default: $project_id]: " project_name
-  project_name=${project_name:-$project_id}
-  
-  # Create project
-  log_info "Creating project: $project_name ($project_id)"
-  if ! gcloud projects create "$project_id" --name="$project_name"; then
-    log_error "Failed to create project"
-    return 1
-  fi
-  
-  log_info "Project created successfully"
-  gcloud config set project "$project_id"
-  export GCP_PROJECT=$project_id
-  
-  # Update config if it exists
-  if [ -f "$CONFIG_YAML" ]; then
-    yq e -i ".gcp.project_id = \"$project_id\"" "$CONFIG_YAML"
-    log_debug "Updated project ID in config"
-  fi
-  
-  # Enable required APIs
-  log_info "Enabling required APIs..."
-  gcloud services enable cloudbuild.googleapis.com \
-                       cloudresourcemanager.googleapis.com \
-                       iam.googleapis.com \
-                       compute.googleapis.com \
-                       storage.googleapis.com \
-                       
-  
-  log_info "Project setup complete: $project_id"
-  return 0
-}
-
-scan_and_select_vpc() {
-  log_step "Scanning and selecting VPC"
-  
-  # Ensure we have a project
-  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
-
-  create_config_yaml
-  # Update project ID in config
-  yq e -i ".gcp.project_id = \"$GCP_PROJECT\"" "$CONFIG_YAML"
-  yq e -i ".github.repo_name = \"$USER_REPO_PATH\"" "$CONFIG_YAML"
-  yq e -i ".environment.networking_option = \"$NETWORKING_OPTION\"" "$CONFIG_YAML"
-  [ -n "$VPC_NAME" ] && yq e -i ".environment.vpc_name = \"$VPC_NAME\"" "$CONFIG_YAML"
-  
-  
-  # Check if Compute Engine API is enabled
-  if ! gcloud services list --enabled --filter="name:compute.googleapis.com" | grep -q "compute.googleapis.com"; then
-    log_info "Enabling Compute Engine API..."
-    gcloud services enable compute.googleapis.com || {
-      log_error "Failed to enable Compute Engine API"
-      return 1
-    }
-  fi
-  
-  # Scan for existing VPCs
-  log_info "Scanning for existing VPCs in project $GCP_PROJECT..."
-  local vpc_list=$(gcloud compute networks list --project="$GCP_PROJECT" --format="value(name)")
-  
-  # Check if any VPCs exist
-  if [ -z "$vpc_list" ]; then
-    log_info "No existing VPCs found in project $GCP_PROJECT"
-    read -e -p "Let Terraform create a new VPC? (Y/n): " create_vpc
-    if [[ ! "$create_vpc" =~ ^[Nn]$ ]]; then
-      export NETWORKING_OPTION="create_new"
-      export VPC_NAME="tf_managed_vpc"
-      log_info "Set networking option to: create_new"
-    else
-      log_error "No VPC available for use"
-      return 1
-    fi
-  else
-    # Display VPCs for selection
-    echo -e "\nExisting VPCs in project $GCP_PROJECT:"
-    local i=1
-    local vpc_array=()
-    
-    while read -r vpc; do
-      echo "  $i) $vpc"
-      vpc_array+=("$vpc")
-      ((i++))
-    done <<< "$vpc_list"
-    
-    echo "  $i) Let Terraform Create a new VPC"
-    
-    # Select VPC
-    read -e -p "Select a VPC (1-$i): " vpc_choice
-    
-    if [ "$vpc_choice" -eq "$i" ]; then
-      export NETWORKING_OPTION="create_new"
-      export VPC_NAME="tf_created_vpc"
-      log_info "Set networking option to: create_new"
-    elif [ "$vpc_choice" -ge 1 ] && [ "$vpc_choice" -lt "$i" ]; then
-      local selected=${vpc_array[$((vpc_choice-1))]}
-      export NETWORKING_OPTION="use_existing"
-      export VPC_NAME="$selected"
-      log_info "Selected VPC: $selected"
-      log_info "Set networking option to: use_existing"
-    else
-      log_error "Invalid selection"
-      return 1
-    fi
-  fi
-  
-  # Update config file
-  if [ -f "$CONFIG_YAML" ]; then
-    yq e -i ".environment.networking_option = \"$NETWORKING_OPTION\"" "$CONFIG_YAML"
-    [ -n "$VPC_NAME" ] && yq e -i ".environment.vpc_name = \"$VPC_NAME\"" "$CONFIG_YAML"
-    log_debug "Updated networking options in config"
-  fi
-  
-  # Set GitHub variables
-  if [ -n "$USER_REPO_PATH" ]; then
-    set_github_variable "NETWORKING_OPTION" "$NETWORKING_OPTION" || log_warning "Failed to set NETWORKING_OPTION"
-    [ -n "$VPC_NAME" ] && set_github_variable "VPC_NAME" "$VPC_NAME" || log_warning "Failed to set VPC_NAME"
-  fi
-  
-  log_info "VPC selection complete"
-  return 0
-}
-
-scan_and_select_subnet() {
-  log_step "Scanning and selecting Subnet"
-  
-  # Only run if we're using an existing VPC
-  if [ "$NETWORKING_OPTION" != "use_existing" ] || [ -z "$VPC_NAME" ]; then
-    log_debug "Skipping subnet selection - not using existing VPC"
-    return 0
-  fi
-  
-  # Ensure we have a project
-  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
-  
-  # Get region from config or use default
-  local region=$(yq e '.gcp.region' "$CONFIG_YAML" 2>/dev/null)
-  [ -z "$region" ] || [ "$region" = "null" ] && region="$DEFAULT_GCP_REGION"
-  
-  # Scan for existing subnets in the selected VPC and region
-  log_info "Scanning for existing subnets in VPC '$VPC_NAME' and region '$region'..."
-  local subnet_list=$(gcloud compute networks subnets list \
-    --project="$GCP_PROJECT" \
-    --network="$VPC_NAME" \
-    --regions="$region" \
-    --format="value(name)")
-  
-  # Check if any subnets exist
-  if [ -z "$subnet_list" ]; then
-    log_info "No existing subnets found in VPC '$VPC_NAME' in region '$region'"
-    log_warning "No subnet available for use in the selected region"
-    # Ask if they want to try another region
-    read -e -p "Try another region? (Y/n): " try_other
-    if [[ ! "$try_other" =~ ^[Nn]$ ]]; then
-        # Get available regions with subnets in this VPC
-        local regions=$(gcloud compute networks subnets list \
-          --project="$GCP_PROJECT" \
-          --network="$VPC_NAME" \
-          --format="value(region)" | sort | uniq)
-        
-        if [ -z "$regions" ]; then
-          log_error "No subnets found in any region for VPC '$VPC_NAME'"
-          return 1
-        fi
-        
-        # Display regions for selection
-        echo -e "\nRegions with subnets in VPC '$VPC_NAME':"
-        local i=1
-        local region_array=()
-        
-        while read -r reg; do
-          echo "  $i) $reg"
-          region_array+=("$reg")
-          ((i++))
-        done <<< "$regions"
-        
-        # Select region
-        read -e -p "Select a region (1-$((i-1))): " region_choice
-        
-        if [ "$region_choice" -ge 1 ] && [ "$region_choice" -lt "$i" ]; then
-          region=${region_array[$((region_choice-1))]}
-          yq e -i ".gcp.region = \"$region\"" "$CONFIG_YAML"
-          set_github_variable "GCP_REGION" "$region" || log_warning "Failed to set GCP_REGION"
-          log_info "Selected region: $region"
-          # Recursive call with new region
-          scan_and_select_subnet
-          return $?
-        else
-          log_error "Invalid selection"
-          return 1
-        fi
-      else
-        return 1
-      fi
-    fi
-  
-  
-  # Display subnets for selection
-  echo -e "\nExisting subnets in VPC '$VPC_NAME' (region '$region'):"
-  local i=1
-  local subnet_array=()
-  
-  while read -r subnet; do
-    # Get subnet details
-    local cidr=$(gcloud compute networks subnets describe "$subnet" \
-      --project="$GCP_PROJECT" \
-      --region="$region" \
-      --format="value(ipCidrRange)")
-    
-    echo "  $i) $subnet ($cidr)"
-    subnet_array+=("$subnet")
-    ((i++))
-  done <<< "$subnet_list"
-  
-  echo "  $i) Let Terraform create a new subnet"
-  
-  # Select subnet
-  read -e -p "Select a subnet (1-$i): " subnet_choice
-  
-  if [ "$subnet_choice" -eq "$i" ]; then
-    # User wants to create a new subnet
-    export SUBNET_NAME=""
-    log_info "Terraform will create a new subnet"
-  elif [ "$subnet_choice" -ge 1 ] && [ "$subnet_choice" -lt "$i" ]; then
-    local selected=${subnet_array[$((subnet_choice-1))]}
-    export SUBNET_NAME="$selected"
-    log_info "Selected subnet: $selected"
-  else
-    log_error "Invalid selection"
-    return 1
-  fi
-  
-  # Update config file
-  if [ -f "$CONFIG_YAML" ]; then
-    [ -n "$SUBNET_NAME" ] && yq e -i ".environment.subnet_name = \"$SUBNET_NAME\"" "$CONFIG_YAML"
-    log_debug "Updated subnet configuration in config"
-  fi
-  
-  # Set GitHub variables
-  if [ -n "$USER_REPO_PATH" ]; then
-    [ -n "$SUBNET_NAME" ] && set_github_variable "SUBNET_NAME" "$SUBNET_NAME" || log_warning "Failed to set SUBNET_NAME"
-  fi
-  
-  log_info "Subnet selection complete"
-  return 0
-}
-
-###################### GCP RESOURCE MANAGEMENT ################################
-
-setup_terraform_storage() {
-  log_step "Setting up Terraform storage"
-  
-  # Ensure we have a project and region
-  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
-  
-  # Get region from config
-  local region=$(yq e '.gcp.region' "$CONFIG_YAML")
-  [ -z "$region" ] || [ "$region" = "null" ] && region="$DEFAULT_GCP_REGION"
-  
-  # Check if bucket exists in GitHub variables
-  BUCKET_NAME=""
-  if [ -n "$USER_REPO_PATH" ] && check_github_variable "BACKEND_STORAGE_ACCOUNT"; then
-    BUCKET_NAME=$(gh variable get BACKEND_STORAGE_ACCOUNT -R "$USER_REPO_PATH" 2>/dev/null)
-  fi
-  
-  # Create new bucket name if needed
-  if [ -z "$BUCKET_NAME" ]; then
-    if [ -n "$USER_REPO_PATH" ]; then
-      local repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
-      BUCKET_NAME="${repo_short_name}-tfstate-$GCP_PROJECT"
-    else
-      BUCKET_NAME="${GCP_PROJECT}-tfstate"
-    fi
-    log_info "Using bucket name: $BUCKET_NAME"
-  fi
-  
-  
-  # Ensure bucket name is lowercase
-  BUCKET_NAME=$(echo "$BUCKET_NAME" | tr '[:upper:]' '[:lower:]')
-
-  if gsutil ls -p "$GCP_PROJECT" "gs://$BUCKET_NAME" &>/dev/null; then
-    log_info "Bucket gs://$BUCKET_NAME already exists"
-  else
-    # Create the bucket
-    log_info "Creating bucket gs://$BUCKET_NAME in $region"
-    if ! gsutil mb -p "$GCP_PROJECT" -l "$region" "gs://$BUCKET_NAME"; then
-      log_error "Failed to create bucket"
-      return 1
-    fi
-    
-    # Enable versioning
-    log_info "Enabling versioning"
-    gsutil versioning set on "gs://$BUCKET_NAME"
-    
-    # Set lifecycle policy
-    log_info "Setting lifecycle management"
-    cat > "/tmp/lifecycle.json" << EOL
-{
-  "rule": [
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "numNewerVersions": 10,
-        "isLive": false
-      }
-    }
-  ]
-}
-EOL
-    gsutil lifecycle set "/tmp/lifecycle.json" "gs://$BUCKET_NAME"
-  fi
-  
-  # Set GitHub variable
-  if [ -n "$USER_REPO_PATH" ]; then
-    set_github_variable "BACKEND_STORAGE_ACCOUNT" "$BUCKET_NAME" || {
-      log_warning "Could not set BACKEND_STORAGE_ACCOUNT variable"
-    }
-  fi
-  
-  log_info "Terraform storage setup complete"
-  return 0
-}
-
-create_service_account() {
-  log_step "Creating Service Account for GitHub Actions"
-  
-  # Ensure we have a project
-  [ -z "$GCP_PROJECT" ] && { log_error "No GCP project set"; return 1; }
-  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
-  
-  # Create service account name
-  local repo_short_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
-  local sa_name="${repo_short_name}-gha"
-  local sa_display_name="GitHub Actions for ${repo_short_name}"
-  local sa_email="${sa_name}@${GCP_PROJECT}.iam.gserviceaccount.com"
-  
-  # Check if service account exists
-  if gcloud iam service-accounts list --filter="email:$sa_email" | grep -q "$sa_email"; then
-    log_info "Service account $sa_email already exists"
-  else
-    # Create service account
-    log_info "Creating service account $sa_name"
-    if ! gcloud iam service-accounts create "$sa_name" \
-         --display-name="$sa_display_name" \
-         --description="Service account for GitHub Actions integration"; then
-      log_error "Failed to create service account"
-      return 1
-    fi
-  fi
-  sleep 3
-  # Grant permissions
-  log_info "Granting permissions to service account"
-  
-  readonly ROLES=(
-    # General CRUD on resources you manage
-    roles/compute.admin            # VMs, disks, addresses, forwarding rules
-    roles/container.admin          # GKE clusters (Autopilot & Standard)
-    roles/storage.admin            # GCS buckets & objects
-    roles/cloudsql.admin           # Cloud SQL instances & users
-    roles/secretmanager.admin
-    roles/servicenetworking.networksAdmin
-    roles/artifactregistry.admin
-    roles/documentai.admin
-    roles/datastore.owner
-    roles/aiplatform.admin
-    roles/servicemanagement.admin # Service managment admin
-    roles/serviceusage.apiKeysAdmin
-    roles/dns.admin
-
-
-    # IAM administration needed by the pipeline
-    roles/iam.serviceAccountAdmin  # create/update SAs, grant them roles
-    roles/iam.securityAdmin        # set IAM policies at project/resource level
-    roles/iam.serviceAccountKeyAdmin   # (optional) manage SA keys, if you ever need them
-    roles/iam.workloadIdentityPoolAdmin # create/update WIF pools/providers
-    roles/iam.serviceAccountUser
-
-    # Enable / disable Google APIs on-the-fly
-    roles/serviceusage.serviceUsageAdmin
-  )
-
-  for role in "${ROLES[@]}"; do
-  gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-    --member="serviceAccount:${sa_email}" \
-    --role="$role" \
-    --quiet
-  done
-
-    
-  # Ask user if they want to use Workload Identity Federation (recommended) 
-  log_warning "GitHub Actions can authenticate with GCP using Workload Identity Federation "
-  read -e -p "Use Workload Identity Federation? (Y/n): " use_wif
-  
-  if [[ ! "$use_wif" =~ ^[Nn]$ ]]; then
-    # Set up Workload Identity Federation
-    setup_workload_identity_federation "$sa_email" || return 1
-  else
-    return 1
-  fi
-  
-  # Set project ID variable
-  set_github_variable "GCP_PROJECT_ID" "$GCP_PROJECT"
-  
-  log_info "Service account setup complete"
-  return 0
-}
-
-setup_workload_identity_federation() {
-  local sa_email="$1"
-  local repo_owner=$(echo "$USER_REPO_PATH" | cut -d'/' -f1)
-  local repo_name=$(echo "$USER_REPO_PATH" | cut -d'/' -f2)
-  
-  log_step "Setting up Workload Identity Federation for GitHub Actions"
-  
-  # Enable required APIs
-  log_info "Enabling IAM Credentials API..."
-  gcloud services enable iamcredentials.googleapis.com
-  gcloud services enable cloudresourcemanager.googleapis.com
-  # Create Workload Identity Pool if it doesn't exist
-  local pool_id="github-actions-pool"
-  local pool_display_name="GitHub Actions Pool"
-
-  if gcloud iam workload-identity-pools list --location="global" | grep -q "$pool_id"; then
-    log_info "Workload Identity Pool $pool_id already exists"
-  else
-    log_info "Creating Workload Identity Pool..."
-    if ! gcloud iam workload-identity-pools create "$pool_id" \
-         --location="global" \
-         --display-name="$pool_display_name" \
-         --description="Identity pool for GitHub Actions"; then
-      log_error "Failed to create Workload Identity Pool"
-      return 1
-    fi
-  fi
-  sleep 3
-  local pool_list=$(gcloud iam workload-identity-pools list --location="global" --format="value(name)")
-  if [ -z "$pool_list" ]; then
-    log_error "No workload identity pools found"
-    return 1
-  fi
-
-  #Use the especifc provider
-  PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format="value(projectNumber)")
-  local pool_name="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$pool_id"
-  log_info "Using pool: $pool_name"
-  
-  # Create Workload Identity Provider for GitHub Actions
-  local provider_id="github-provider"
-  local provider_display_name="GitHub Provider"
-  
-  if gcloud iam workload-identity-pools providers list \
-       --workload-identity-pool="$pool_id" \
-       --location="global" | grep -q "$provider_id"; then
-    log_info "Workload Identity Provider $provider_id already exists"
-  else
-    log_info "Creating Workload Identity Provider..."
-    if ! gcloud iam workload-identity-pools providers create-oidc "$provider_id" \
-         --workload-identity-pool="$pool_id" \
-         --location="global" \
-         --display-name="$provider_display_name" \
-         --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-         --attribute-condition="attribute.repository=='${repo_owner}/${repo_name}'" \
-         --issuer-uri="https://token.actions.githubusercontent.com"; then
-      log_error "Failed to create Workload Identity Provider"
-      return 1
-    fi
-  fi
-  sleep 3
-  # Allow authentications from the specified repository to impersonate the service account
-  log_info "Setting up IAM policy binding..."
-  
-  if ! gcloud iam service-accounts add-iam-policy-binding "$sa_email" \
-       --role="roles/iam.workloadIdentityUser" \
-       --member="principalSet://iam.googleapis.com/${pool_name}/attribute.repository/${repo_owner}/${repo_name}"; then
-    log_error "Failed to add IAM policy binding"
-    return 1
-  fi
-  
-
-  
-  # Get provider name for GitHub Actions
-  local provider_name="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$pool_id/providers/$provider_id"
-  
-  # Set GitHub variables for Workload Identity Federation
-  set_github_variable "WORKLOAD_IDENTITY_PROVIDER" "$provider_name" || log_warning "Failed to set WORKLOAD_IDENTITY_PROVIDER"
-  set_github_variable "SERVICE_ACCOUNT" "$sa_email" || log_warning "Failed to set SERVICE_ACCOUNT"
-  
-  log_info "Workload Identity Federation setup complete"
-  log_info "GitHub workflow will use the following configuration:"
-  echo -e "Workload Identity Provider: ${CYAN}$provider_name${NC}"
-  echo -e "Service Account: ${CYAN}$sa_email${NC}"
-  
-  return 0
-}
-
 ###################### MAIN EXECUTION FLOW ###################################
-
-run_workflow() {
-  log_step "Running GitHub workflow"
-  
-  # Check prerequisites
-  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
-  
-  # Check if workflow exists
-  if ! gh workflow list -R "$USER_REPO_PATH" 2>/dev/null | grep -q "Deploy Google Cloud Infrastructure"; then
-    log_warning "Workflow 'Deploy Google Cloud Infrastructure' not found"
-    log_info "Please ensure the workflow file has been pushed to the repository"
-    return 1
-  fi
-  
-  # Run workflow
-  log_info "Starting 'Deploy Google Cloud Infrastructure' workflow..."
-  if ! gh workflow run "Deploy Google Cloud Infrastructure" -R "$USER_REPO_PATH"; then
-    log_error "Failed to start workflow"
-    return 1
-  fi
-  
-  log_info "Workflow started successfully"
-  
-  # Ask to monitor progress
-  read -e -p "Monitor workflow progress? (Y/n): " monitor
-  if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
-    monitor_workflow "Deploy Google Cloud Infrastructure" || {
-      log_warning "Workflow did not complete successfully"
-      return 1
-    }
-  else
-    log_info "You can check the workflow status in the GitHub Actions tab"
-  fi
-  
-  return 0
-}
-
-
-run_app_ci_workflow() {
-  local workflow_name="Application CI/CD"
-
-  log_step "Running GitHub workflow: $workflow_name"
-
-  # Check prerequisites
-  [ -z "$USER_REPO_PATH" ] && { log_error "No repository selected"; return 1; }
-
-  # Check if workflow exists
-  if ! gh workflow list -R "$USER_REPO_PATH" \
-       | grep -qF "$workflow_name"; then
-    log_warning "Workflow '$workflow_name' not found"
-    log_info    "Please ensure the workflow file has been pushed to the repository"
-    return 1
-  fi
-
-  # Run workflow
-  log_info "Starting '$workflow_name' workflow..."
-  if ! gh workflow run "$workflow_name" -R "$USER_REPO_PATH"; then
-    log_error "Failed to start workflow"
-    return 1
-  fi
-
-  log_info "Workflow started successfully"
-
-  # Ask to monitor progress
-  read -e -p "Monitor '$workflow_name' progress? (Y/n): " monitor
-  if [[ ! "$monitor" =~ ^[Nn]$ ]]; then
-    monitor_workflow "$workflow_name" || {
-      log_warning "Workflow did not complete successfully"
-      return 1
-    }
-  else
-    log_info "You can check the workflow status in the GitHub Actions tab"
-  fi
-
-  return 0
-}
 
 # Main function to orchestrate execution
 main() {
-
   display_script_overview
   
   log_step "Starting GCP deployment setup"
@@ -1387,63 +1593,68 @@ main() {
   # Step 1: Check and install dependencies
   install_dependencies || { log_error "Dependency installation failed"; return 1; }
   
-
-  ##Ask the user what env they want to deploy
-  read -e -p "Enter the environment you want to deploy (dev/staging/prod): " ENVIRONMENT
-  ENVIRONMENT=${ENVIRONMENT:-dev}
-  export ENVIRONMENT
-  log_info "Environment set to: $ENVIRONMENT"
-
-
-
   # Step 2: Handle GitHub authentication and repository selection
   check_github_auth || { log_error "GitHub authentication failed"; return 1; }
   
-  # Step 3: Handle GCP authentication
+  # Step 3: Select environment
+  read -e -p "Enter the environment you want to deploy (dev/staging/prod) [default: dev]: " input_env
+  ENVIRONMENT=${input_env:-$DEFAULT_ENV}
+  export ENVIRONMENT
+  log_info "Environment set to: $ENVIRONMENT"
+  
+  # Create the GitHub environment
+  create_github_environment "$ENVIRONMENT" || { log_error "Failed to set up GitHub environment"; return 1; }
+  
+  # Set environment name in GitHub variables
+  set_github_variable "ENVIRONMENT" "$ENVIRONMENT" "$ENVIRONMENT"
+  
+  # Step 4: Handle GCP authentication
   check_gcp_auth || { log_error "GCP authentication failed"; return 1; }
   
-  # Step 3.5
-  scan_and_select_vpc || { log_error "VPC selection failed, GKE needs a VPC to Work, please run the script again and choose a VPC Option"; return 1; }
-
-  if [ "$NETWORKING_OPTION" = "use_existing" ]; then
-    scan_and_select_subnet || { log_error "Subnet selection failed, GKE needs a subnet to work with you can retry by choosing the option Let "Terraform to Create a new VPC" "; return 1; }
-  fi
-
-  # Step 4: Setup and validate configuration
-  validate_config || { log_warning "Configuration validation failed, continuing anyway"; }
+  # Step 5: Configure GCP region if it doesn't exist in GitHub variables
+  set_gcp_region || { log_error "GCP region configuration failed"; return 1; }
   
-  # Step 5: Setup GCP infrastructure
+  # Step 6: Set up VPC/subnet configuration
+  scan_and_select_vpc || { log_error "VPC selection failed, GKE needs a VPC to work, please run the script again and choose a VPC option"; return 1; }
+  
+  if [ "$NETWORKING_OPTION" = "use_existing" ]; then
+    scan_and_select_subnet || { log_error "Subnet selection failed, GKE needs a subnet to work with"; return 1; }
+  fi
+  
+  # Step 7: Setup Terraform storage
   setup_terraform_storage || log_warning "Terraform storage setup failed"
   
-  # Step 6: Setup GitHub integration with WIF
+  # Step 8: Setup GitHub integration with WIF
   if [ -n "$USER_REPO_PATH" ]; then
     setup_github_actions_token || log_warning "GitHub Actions token setup failed"
-    create_service_account || log_warning "Service account setup failed or canceled"
-    sync_github_variables || log_warning "GitHub variable sync failed"
+    create_service_account || log_warning "Service account setup failed"
   fi
   
+  # Step 9: Set up labels for resources
+  log_info "Setting up resource labels"
+  local labels="{\"managed-by\":\"terraform\",\"environment\":\"$ENVIRONMENT\"}"
+  set_github_variable "GCP_LABELS" "$labels" "$ENVIRONMENT"
   
-  
-  # Step 7: Ask to run infra‑ci workflow
+  # Step 10: Ask to run infra-ci workflow
   if [ -n "$USER_REPO_PATH" ]; then
-    read -e -p "Run deployment workflow now? (Y/n): " run_now
+    read -e -p "Run infrastructure deployment workflow now? (Y/n): " run_now
     if [[ ! "$run_now" =~ ^[Nn]$ ]]; then
       run_workflow || log_warning "Infrastructure workflow execution failed"
-
-      # Step 8: Ask to run app‑ci workflow
-      read -e -p "Deploy application now with app‑ci workflow? (Y/n): " run_app
+      
+      # Step 11: Ask to run app-ci workflow
+      read -e -p "Deploy application now? (Y/n): " run_app
       if [[ ! "$run_app" =~ ^[Nn]$ ]]; then
-        echo "→ Triggering Application CI/CD workflow…"
-        run_app_ci_workflow || log_warning "Application CI/CD workflow execution failed"
+        run_app_workflow || log_warning "Application workflow execution failed"
       else
         echo "→ Skipping application deployment."
       fi
     fi
   fi
-
+  
   log_step "Setup complete"
-  log_info  "Your GCP deployment environment is ready in $USER_REPO_PATH"
-
+  log_info "Your GCP deployment environment is ready in $USER_REPO_PATH"
+  log_info "Environment: $ENVIRONMENT"
+  
   return 0
 }
 
