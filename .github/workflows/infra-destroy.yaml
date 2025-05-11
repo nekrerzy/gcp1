@@ -28,7 +28,25 @@ env:
 
 jobs:
 
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* && "${{ github.ref }}" == *[Vv]* ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT  # Default fallback
+          fi
+
+
   remove_app:
+    needs: determine-environment
+    environment: ${{ needs.determine-environment.outputs.environment }}
     name: Remove Helm APP
     runs-on: ubuntu-latest
     permissions:
@@ -74,9 +92,11 @@ jobs:
         helm uninstall demo-app --namespace ${{ env.NAMESPACE }} --ignore-not-found
 
   destroy:
+    needs: [determine-environment, remove_app]
+    environment: ${{ needs.determine-environment.outputs.environment }}
     name: Terraform Destroy
     runs-on: ubuntu-latest
-    needs: remove_app
+
     defaults:
       run:
         working-directory: infra/env/dev

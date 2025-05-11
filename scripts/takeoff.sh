@@ -560,19 +560,13 @@ setup_github_actions_token() {
   # Environment-specific secrets
   case "$ENVIRONMENT" in
     prod)
-      env_secrets["DEPLOY_URL"]="https://production.example.com"
-      env_secrets["PRODUCTION_MODE"]="true"
-      env_secrets["LOG_LEVEL"]="error"
+      env_secrets["SENSITIVE_VALUE"]="DATA_PROD"     
       ;;
     staging)
-      env_secrets["DEPLOY_URL"]="https://staging.example.com"
-      env_secrets["PRODUCTION_MODE"]="false"
-      env_secrets["LOG_LEVEL"]="warn"
+      env_secrets["SENSITIVE_VALUE"]="DATA_PROD"
       ;;
     dev)
-      env_secrets["DEPLOY_URL"]="https://dev.example.com"
-      env_secrets["PRODUCTION_MODE"]="false"
-      env_secrets["LOG_LEVEL"]="debug"
+      env_secrets["SENSITIVE_VALUE"]="DATA_PROD"
       ;;
   esac
   

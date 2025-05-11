@@ -17,29 +17,11 @@ permissions:
   id-token: write
   pull-requests: write
 
+# Eliminamos las variables globales de env y solo dejamos una variable que es común para todos los jobs
 env:
-  
-  # Terraform State variables
-  TFSTATE: 'tfstate'
-  
-  # Terraform variables
-  TF_VAR_environment: ${{ github.ref_name }}
-  TF_VAR_location: ${{ vars.GCP_REGION }}
-  TF_VAR_unique_suffix:  ${{ vars.UNIQUE_SUFFIX || 'gcp101' }}
-  TF_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  TF_BACKEND_BUCKET: ${{ vars.BACKEND_STORAGE_ACCOUNT }}
-  WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
-  SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT }}
   NAMESPACE: dev
-  TF_VAR_network_option: ${{ vars.NETWORKING_OPTION || 'create_new' }}
-  TF_VAR_existing_vpc_name: ${{ vars.VPC_NAME || '' }}
-  TF_VAR_existing_subnet_name: ${{ vars.SUBNET_NAME || '' }}
-
-    
-
 
 jobs:
-
   determine-environment:
     runs-on: ubuntu-latest
     outputs:
@@ -100,38 +82,8 @@ jobs:
       run: |
         tfsec .
       continue-on-error: true
-  # wiz-scan:
-  #   name: "Wiz-cli IaC Scan"
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     SCAN_PATH: "infra/"
-  #     POLICY: "Default IaC policy" # Set the desired Wiz CLI policy to use
-
-  #   # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
-  #   defaults:
-  #     run:
-  #       shell: bash
-
-  #   steps:
-  #     # Checkout the repository to the GitHub Actions runner
-  #     - name: Check out repository
-  #       uses: actions/checkout@v4
-
-  #     - name: Download Wiz CLI
-  #       run: curl -o wizcli https://downloads.wiz.io/wizcli/latest/wizcli-linux-amd64 && chmod +x wizcli
-
-  #     - name: Authenticate to Wiz
-  #       run: ./wizcli auth --id "$WIZ_CLIENT_ID" --secret "$WIZ_CLIENT_SECRET"
-  #       env:
-  #         WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
-  #         WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
-      
-  #     - name: Run wiz CLI IaC scan
-  #       run: ./wizcli iac scan --path $SCAN_PATH --policy "$POLICY"
-    
 
   terraform-fmt:
-
     needs: [determine-environment, lint, security]
     name: Terraform Format
     environment: ${{ needs.determine-environment.outputs.environment }}
@@ -169,9 +121,9 @@ jobs:
       name: 'Authenticate to GCP'
       uses: 'google-github-actions/auth@v2'
       with:
-        project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
-        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ env.SERVICE_ACCOUNT }}
+        project_id: ${{ vars.GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ vars.SERVICE_ACCOUNT }}
     - id: 'gcloud'
       name: 'gcloud'
       run: |-
@@ -198,38 +150,35 @@ jobs:
     - name: 'Authenticate to GCP'
       uses: 'google-github-actions/auth@v2'
       with:
-        project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
-        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ env.SERVICE_ACCOUNT }}
+        project_id: ${{ vars.GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ vars.SERVICE_ACCOUNT }}
 
     - name: Terraform Init
       id: init
       run: |
         terraform init \
-          -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
-          -backend-config="prefix=terraform/state/dev" \
-          
+          -backend-config="bucket=${{ vars.BACKEND_STORAGE_ACCOUNT }}" \
+          -backend-config="prefix=terraform/state/${{ needs.determine-environment.outputs.environment }}"
 
-          
-        
     - name: Terraform Plan
       run: |
-        terraform plan -lock=false -out='${{ env.TF_VAR_environment }}.plan.tfplan' \
-          -var="region=${{ env.TF_VAR_location }}" \
-          -var="project_id=${{ env.TF_VAR_GCP_PROJECT_ID }}" \
-          -var="network_option=${{ env.TF_VAR_network_option }}" \
-          -var="existing_vpc_name=${{ env.TF_VAR_existing_vpc_name }}" \
-          -var="existing_subnet_name=${{ env.TF_VAR_existing_subnet_name }}" \
-          -var="storage_location=${{ env.TF_VAR_location }}" \
-      
-          
+        terraform plan -lock=false -out='${{ needs.determine-environment.outputs.environment }}.plan.tfplan' \
+          -var="region=${{ vars.GCP_REGION }}" \
+          -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+          -var="network_option=${{ vars.NETWORKING_OPTION || 'create_new' }}" \
+          -var="existing_vpc_name=${{ vars.VPC_NAME || '' }}" \
+          -var="existing_subnet_name=${{ vars.SUBNET_NAME || '' }}" \
+          -var="storage_location=${{ vars.GCP_REGION }}" \
+          -var="environment=${{ needs.determine-environment.outputs.environment }}" \
+          -var="unique_suffix=${{ vars.UNIQUE_SUFFIX || 'gcp101' }}"
       continue-on-error: true
 
     - name: Upload Terraform Plan
       uses: actions/upload-artifact@v4
       with:
         name: terraform-plan
-        path: infra/env/dev/${{ env.TF_VAR_environment }}.plan.tfplan
+        path: infra/env/dev/${{ needs.determine-environment.outputs.environment }}.plan.tfplan
         retention-days: 5
 
     - name: Terraform Plan Status
@@ -239,14 +188,11 @@ jobs:
     - name: Terraform Apply
       if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       run: |
-        terraform apply -auto-approve -input=false ${{ env.TF_VAR_environment }}.plan.tfplan
-
-
+        terraform apply -auto-approve -input=false ${{ needs.determine-environment.outputs.environment }}.plan.tfplan
 
     - name: Capture Terraform Outputs
       if: success()
       run: |
-
         CURRENT_ENV="${{ needs.determine-environment.outputs.environment }}"
 
         # Project info
@@ -301,7 +247,6 @@ jobs:
         
         # Service accounts
         gh variable set GSA_PODS_SERVICE_ACCOUNT --env $CURRENT_ENV --body "$(terraform output -raw pods_service_account_email)"
-        
       env:
         GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
 
@@ -314,9 +259,8 @@ jobs:
       run: |
           gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
             --dns-endpoint \
-            --region=${{ env.TF_VAR_location }} \
-            --project=${{ env.TF_VAR_GCP_PROJECT_ID }}
-
+            --region=${{ vars.GCP_REGION }} \
+            --project=${{ vars.GCP_PROJECT_ID }}
 
     - name: Create Kubernetes Namespace
       run: |
@@ -344,14 +288,13 @@ jobs:
       run: |
         gcloud iam service-accounts add-iam-policy-binding $(terraform output -raw pods_service_account_email) \
         --role roles/iam.workloadIdentityUser \
-        --member "serviceAccount:${{ env.TF_VAR_GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/pods-sa]"
+        --member "serviceAccount:${{ vars.GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/pods-sa]"
       
     - name: Bind Kubernetes ESPV2 Service Account to IAM Role
       run: |
         gcloud iam service-accounts add-iam-policy-binding $(terraform output -raw espv2_service_account_email) \
         --role roles/iam.workloadIdentityUser \
-        --member "serviceAccount:${{ env.TF_VAR_GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/espv2-sa]"
-      
+        --member "serviceAccount:${{ vars.GCP_PROJECT_ID }}.svc.id.goog[${{ env.NAMESPACE }}/espv2-sa]"
 
   cloud-endpoint:
     needs: [infrastructure, determine-environment]
@@ -365,16 +308,15 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ env.TF_VAR_GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.SERVICE_ACCOUNT }}
 
       - name: Setup gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           
-
       - name: Set ENDPOINT_HOST
         run: |
           echo "ENDPOINT_HOST=demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog" >> $GITHUB_ENV
@@ -405,19 +347,16 @@ jobs:
   
       - name: Create or reuse API Key
         id: create_api_key
-        env:
-          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
           # Exit immediately if a command exits with a non-zero status.
           set -e
 
-          
-          NAME="Endpoints API Key for ${PROJECT_ID}"
+          NAME="Endpoints API Key for ${{ vars.GCP_PROJECT_ID }}"
           FILTER_EXPRESSION="displayName=\"${NAME}\"" 
 
           echo "→ Looking for API Key with display name: ${NAME}"
           KEY_NAME=$(gcloud services api-keys list \
-            --project="${PROJECT_ID}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
             --filter="${FILTER_EXPRESSION}" \
             --format="value(name)" \
             --limit=1) # Limit to 1 just in case of duplicates somehow
@@ -427,14 +366,13 @@ jobs:
 
             # Create the key
             gcloud services api-keys create \
-              --project="${PROJECT_ID}" \
+              --project="${{ vars.GCP_PROJECT_ID }}" \
               --display-name="${NAME}" \
               --quiet
 
-            
             echo "→ Fetching name of newly created API Key..."
             KEY_NAME=$(gcloud services api-keys list \
-              --project="${PROJECT_ID}" \
+              --project="${{ vars.GCP_PROJECT_ID }}" \
               --filter="${FILTER_EXPRESSION}" \
               --format="value(name)" \
               --limit=1) # Re-fetch the name
@@ -453,7 +391,7 @@ jobs:
 
           echo "→ Fetching Key String for ${KEY_NAME##*/}"
           KEY_STRING=$(gcloud services api-keys get-key-string "${KEY_NAME}" \
-            --project="${PROJECT_ID}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
             --format="value(keyString)") 
 
           if [[ -z "$KEY_STRING" ]]; then
@@ -463,10 +401,9 @@ jobs:
 
           echo "→ Applying restrictions to ${KEY_NAME##*/}"
           gcloud services api-keys update "${KEY_NAME}" \
-            --project="${PROJECT_ID}" \
-            --api-target=service=demoapi.endpoints.${PROJECT_ID}.cloud.goog
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --api-target=service=demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog
             
-
           echo "→ API Key setup complete."
 
           # Add the key string to GitHub environment variables and mask it
@@ -475,7 +412,6 @@ jobs:
 
       - name: Save ENDPOINT API Key to GitHub Secrets
         run: |
-          echo "$ENDPOINTS_API_KEY" | gh secret set ENDPOINTS_API_KEY --env "$CURRENT_ENV"
-          
+          echo "$ENDPOINTS_API_KEY" | gh secret set ENDPOINTS_API_KEY --env "${{ needs.determine-environment.outputs.environment }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GHACTIONS_TOKEN }}
