@@ -28,6 +28,7 @@ env:
   TF_VAR_unique_suffix:  ${{ vars.UNIQUE_SUFFIX || 'gcp101' }}
   TF_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   TF_BACKEND_BUCKET: ${{ vars.BACKEND_STORAGE_ACCOUNT }}
+  ENVIRONMENT: ${{ vars.ENVIRONMENT }}
   WORKLOAD_IDENTITY_PROVIDER: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
   SERVICE_ACCOUNT: ${{ vars.SERVICE_ACCOUNT }}
   NAMESPACE: dev
@@ -40,6 +41,7 @@ env:
 jobs:
   lint:
     name: lint
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -65,6 +67,7 @@ jobs:
       continue-on-error: true
   security:
     name: security
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -111,6 +114,7 @@ jobs:
   terraform-fmt:
 
     name: Terraform Format
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     needs: [lint, security]
     steps:
@@ -137,7 +141,7 @@ jobs:
 
   gcloud-auth:
     name: Google Auth
-    environment: ${{ vars.ENVIRONMENT }}
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     steps:
     - uses: 'actions/checkout@v4'
@@ -155,6 +159,7 @@ jobs:
 
   infrastructure:
     name: Terraform Plan & Apply
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     needs: [terraform-fmt]
     defaults:
@@ -327,6 +332,7 @@ jobs:
 
   cloud-endpoint:
     name: Configure API Gateway
+    environment: ${{ env.ENVIRONMENT }}
     runs-on: ubuntu-latest
     needs: [infrastructure]
     steps:
