@@ -37,7 +37,7 @@ env:
   FRONT_IP_ADDRESS: ${{ vars.FRONT_IP_ADDRESS }}
   FRONT_IP_NAME:    ${{ vars.FRONT_IP_NAME }}
   API_IP_NAME:  ${{ vars.API_IP_NAME }}
-  BACKEND_URL: "https://backend.${{ vars.PROJECT_NUMBER }}.gcp.bain.dev"
+  BACKEND_URL: "https://backend-${{vars.Environment}}.${{ vars.PROJECT_NUMBER }}.gcp.bain.dev"
   CLOUD_ARMOR_POLICY_NAME: ${{ vars.CLOUD_ARMOR_POLICY_NAME }}
   NAMESPACE: dev
 

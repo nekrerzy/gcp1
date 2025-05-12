@@ -2,7 +2,7 @@
 
 resource "google_vertex_ai_index" "vector_store" {
   region       = var.region
-  display_name = "rag-vector-store-genai-dev-gcp101"
+  display_name = "rag-vector-store-genai-${var.environment}-${var.unique_suffix}"
 
   metadata {
     contents_delta_uri = var.vertex_ai_storage_uri
@@ -25,7 +25,7 @@ resource "google_vertex_ai_index" "vector_store" {
 
 data "google_project" "project" {}
 resource "google_vertex_ai_index_endpoint" "index_endpoint" {
-  display_name = "rag-endpoint"
+  display_name = "rag-endpoint-genai-${var.environment}-${var.unique_suffix}"
   description  = "A sample vertex index endpoint"
   region       = var.region
   labels = {
