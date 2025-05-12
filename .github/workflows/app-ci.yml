@@ -16,8 +16,8 @@ on:
   push:
     branches:
       - main
-      - 'refs/tags/*'
-
+    tags:
+      - 'v*'
     paths:
       - 'app/**'
       - '.github/workflows/app-ci.yml'
@@ -243,7 +243,7 @@ jobs:
           --set-string 'espv2.args[6]=--cors_allow_methods=GET\,POST\,PUT\,OPTIONS' \
           --set-string 'espv2.args[7]=--cors_allow_headers=Origin\,Content-Type\,Accept\,Authorization\,x-api-key' \
           --set-string securityPolicy.name="${{ env.CLOUD_ARMOR_POLICY_NAME }}" \
-          --set-string frontend.ingress.host="frontend-${{ env.environment }}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
-          --set-string espv2.ingress.host="backend-${{ env.environment }}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
-          --set-string frontend.managedCert="frontend-${{ env.environment }}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
-          --set-string espv2.managedCert="backend-${{ env.environment }}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string frontend.ingress.host="frontend-${{vars.Environment}}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string espv2.ingress.host="backend-${{vars.Environment}}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string frontend.managedCert="frontend-${{vars.Environment}}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
+          --set-string espv2.managedCert="backend-${{vars.Environment}}.${{ env.GCP_PROJECT_NUMBER }}.gcp.bain.dev" \
