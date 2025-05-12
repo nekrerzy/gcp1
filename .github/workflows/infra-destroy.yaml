@@ -3,6 +3,7 @@ name: 'Destroy Google Cloud Infrastructure'
 on:
   workflow_dispatch:
     inputs:
+      
       environment:
         description: 'Environment to deploy'
         required: true
@@ -45,6 +46,11 @@ jobs:
     steps:
       - id: set-env
         run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          exit 0
+          fi
+
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "environment=dev" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/* && "${{ github.ref }}" == *[Vv]* ]]; then
