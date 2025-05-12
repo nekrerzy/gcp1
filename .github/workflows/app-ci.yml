@@ -3,7 +3,25 @@ name: Application CI/CD
 
 on:
   workflow_dispatch:
-  
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+          - staging
+  push:
+    branches:
+      - main
+      - 'refs/tags/*'
+
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ci.yml'
+      
 
 env:
   # --- Global Variables ---

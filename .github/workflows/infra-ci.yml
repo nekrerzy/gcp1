@@ -13,12 +13,14 @@ on:
           - prod
           - staging
 
-
   push:
     branches:
       - main
     tags:
       - 'v*'
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-ci.yml'
        
 permissions:
   contents: write
