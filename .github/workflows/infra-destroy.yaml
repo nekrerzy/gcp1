@@ -96,9 +96,6 @@ jobs:
         project_id: ${{ vars.GCP_PROJECT_ID }}
 
 
-    - name: Pause to let gcp resources be removed before destroy
-      run: sleep 180   
-
     # - name: Delete Cloud Endpoints service
     #   run: |
     #     gcloud endpoints services delete "demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog" \
