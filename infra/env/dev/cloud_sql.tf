@@ -15,7 +15,7 @@ module "cloud_sql" {
 
   database_version    = "POSTGRES_17"
   disk_size           = 30
-  tier                = var.environment == "dev" ? "db-custom-2-4096" : "db-custom-4-16384"
+  tier                = var.environment == "dev" ? "db-custom-2-4096" : "db-perf-optimized-N-4"
   availability_type   = var.environment == "dev" ? "ZONAL" : "REGIONAL"
   edition             = var.environment == "dev" ? "ENTERPRISE" : "ENTERPRISE_PLUS"
   backup_enabled      = true # Keep backups on even for dev

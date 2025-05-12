@@ -8,16 +8,16 @@ module "document_ai" {
   # Define the processorss
   processors = [
     {
-      display_name = "form-parser"
+      display_name = "form-parser-${var.environment}"
       type         = "FORM_PARSER_PROCESSOR"
       timeout      = 600
     },
     {
-      display_name = "ocr-processor"
+      display_name = "ocr-processor-${var.environment}"
       type         = "OCR_PROCESSOR"
     },
     {
-      display_name = "invoice-processor"
+      display_name = "invoice-processor-${var.environment}"
       type         = "INVOICE_PROCESSOR"
     },
 
