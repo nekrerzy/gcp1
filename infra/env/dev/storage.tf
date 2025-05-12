@@ -6,7 +6,7 @@ resource "random_id" "bucket_suffix" {
 
 locals {
   # Common bucket prefix and suffix for all buckets in this environment
-  
+
   bucket_suffix = random_id.bucket_suffix.hex
 
 
@@ -28,11 +28,12 @@ locals {
 
 # Import the storage module
 module "storage" {
-
   source = "../../modules/storage"
 
-  project_id = var.project_id
-  location   = var.storage_location
+  project_id    = var.project_id
+  location      = var.storage_location
+  environment   = var.environment
+  unique_suffix = local.bucket_suffix
 
 
   # Pass the processed bucket configurations

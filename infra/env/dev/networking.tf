@@ -12,7 +12,7 @@ module "networking" {
   # These resources are only created when network_option is "create_new"
   subnets = [
     {
-      name             = "app-subnet"
+      name             = "app-subnet-${var.environment}-${var.unique_suffix}"
       ip_cidr_range    = "10.10.0.0/20"
       region           = var.region
       secondary_ranges = []

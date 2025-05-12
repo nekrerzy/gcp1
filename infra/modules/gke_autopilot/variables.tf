@@ -88,3 +88,10 @@ variable "service_account_email" {
   description = "The service account email to use for nodes"
   type        = string
 }
+
+variable "environment" {
+  description = "The environment for the resources (dev, staging, prod)"
+  type        = string
+  default     = "dev"
+
+}

@@ -9,16 +9,17 @@ module "cloud_sql" {
 
 
   instance_name = "psql-${var.project_id}-${var.environment}-${var.unique_suffix}"
-  database_name = var.db_name
+  database_name = "postgres-genai-${var.environment}-${var.unique_suffix}"
   user_name     = "app_user"
 
 
   database_version    = "POSTGRES_17"
   disk_size           = 30
-  tier                = "db-custom-2-4096" # Smallest size for dev change it accordingly
-  availability_type   = "ZONAL"            # Single zone for dev environments
-  backup_enabled      = true               # Keep backups on even for dev
-  deletion_protection = false              # Easy cleanup for dev
+  tier                = var.environment == "dev" ? "db-custom-2-4096" : "db-custom-4-16384"
+  availability_type   = var.environment == "dev" ? "ZONAL" : "REGIONAL"
+  edition             = var.environment == "dev" ? "ENTERPRISE" : "ENTERPRISE_PLUS"
+  backup_enabled      = true # Keep backups on even for dev
+  deletion_protection = var.environment == "prod" ? true : false
 
   depends_on = [
     module.networking,
@@ -32,7 +33,7 @@ module "cloud_sql" {
 
 
 resource "google_secret_manager_secret" "db-user" {
-  secret_id = "db-user"
+  secret_id = "db-user-${var.environment}"
   project   = var.project_id
 
   replication {
@@ -49,7 +50,7 @@ resource "google_secret_manager_secret_version" "db-user-version" {
 }
 
 resource "google_secret_manager_secret" "db-password" {
-  secret_id = "db-password"
+  secret_id = "db-password-${var.environment}"
   project   = var.project_id
   replication {
     auto {}
@@ -64,7 +65,7 @@ resource "google_secret_manager_secret_version" "db-password-version" {
 }
 
 resource "google_secret_manager_secret" "db-name" {
-  secret_id = "db-name"
+  secret_id = "db-name-${var.environment}"
   project   = var.project_id
   replication {
     auto {}
@@ -79,7 +80,7 @@ resource "google_secret_manager_secret_version" "db-name-version" {
 }
 
 resource "google_secret_manager_secret" "db-instance-connection-name" {
-  secret_id = "db-instance-connection-name"
+  secret_id = "db-instance-connection-name-${var.environment}"
   project   = var.project_id
   replication {
     auto {}

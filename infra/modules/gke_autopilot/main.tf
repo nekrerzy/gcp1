@@ -2,14 +2,14 @@
 ## Static IP addresses for GKE ingress Front and API
 
 resource "google_compute_global_address" "frontend" {
-  name         = "${var.cluster_name}-frontend-ip"
+  name         = "${var.cluster_name}-frontend-ip-${var.environment}"
   description  = "Global static IP address for Frontend GKE ingress"
   address_type = "EXTERNAL"
   project      = var.project_id
 }
 
 resource "google_compute_global_address" "api" {
-  name         = "${var.cluster_name}-api-ip"
+  name         = "${var.cluster_name}-api-ip-${var.environment}"
   description  = "Global static IP address for API GKE ingress"
   address_type = "EXTERNAL"
   project      = var.project_id
@@ -22,7 +22,7 @@ resource "google_compute_global_address" "api" {
 
 resource "google_container_cluster" "autopilot" {
   name     = var.cluster_name
-  location = var.regional ? var.region : var.zone
+  location = var.environment == "prod" ? var.region : var.zone
   project  = var.project_id
 
 
@@ -32,7 +32,7 @@ resource "google_container_cluster" "autopilot" {
   # Networking configuration
   network             = var.network
   subnetwork          = var.subnetwork
-  deletion_protection = false
+  deletion_protection = var.environment == "prod" ? true : false
 
 
   # explicity set the service_account used by the GKE nodes to prevent the default service account from being used

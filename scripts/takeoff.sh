@@ -365,29 +365,29 @@ create_github_environment() {
   if gh api -X PUT repos/${repo_name}/environments/$env_name; then
     log_info "Successfully created GitHub environment: $env_name"
     
-    # Configure environment protection rules based on environment type
-    case "$env_name" in
-      prod)
-        # Try to set up protection rules for production environment
-        gh api -X PUT repos/${repo_name}/environments/$env_name \
-          -f deployment_branch_policy[protected_branches]=true \
-          -f deployment_branch_policy[custom_branch_policies]=false \
-          && log_info "Set up protection rules for production environment"
-        ;;
-      staging)
-        # Set up basic protection for staging
-        gh api -X PUT repos/${repo_name}/environments/$env_name \
-          -f deployment_branch_policy[protected_branches]=false \
-          -f deployment_branch_policy[custom_branch_policies]=true \
-          -f deployment_branch_policy.custom_branch_policies[0].name='main' \
-          -f deployment_branch_policy.custom_branch_policies[1].name='staging-*' \
-          && log_info "Set up protection rules for staging environment"
-        ;;
-      dev)
-        # Minimal protection for dev environment
-        log_info "No special protection rules set for dev environment"
-        ;;
-    esac
+    # # Configure environment protection rules based on environment type
+    # case "$env_name" in
+    #   prod)
+    #     # Try to set up protection rules for production environment
+    #     gh api -X PUT repos/${repo_name}/environments/$env_name \
+    #       -f deployment_branch_policy[protected_branches]=true \
+    #       -f deployment_branch_policy[custom_branch_policies]=false \
+    #       && log_info "Set up protection rules for production environment"
+    #     ;;
+    #   staging)
+    #     # Set up basic protection for staging
+    #     gh api -X PUT repos/${repo_name}/environments/$env_name \
+    #       -f deployment_branch_policy[protected_branches]=false \
+    #       -f deployment_branch_policy[custom_branch_policies]=true \
+    #       -f deployment_branch_policy.custom_branch_policies[0].name='main' \
+    #       -f deployment_branch_policy.custom_branch_policies[1].name='staging-*' \
+    #       && log_info "Set up protection rules for staging environment"
+    #     ;;
+    #   dev)
+    #     # Minimal protection for dev environment
+    #     log_info "No special protection rules set for dev environment"
+    #     ;;
+    # esac
     
     return 0
   else

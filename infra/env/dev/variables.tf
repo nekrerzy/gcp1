@@ -283,4 +283,8 @@ variable "storage_buckets" {
   ]
 }
 
-
+variable "gke_cluster_name" {
+  description = "Name of the GKE cluster"
+  type        = string
+  default     = "genai-dev-gcp101-cluster"
+}

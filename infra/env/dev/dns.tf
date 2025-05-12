@@ -8,7 +8,7 @@ module "cloud_dns_frontend" {
 
   dns_records = {
     frontend = {
-      name    = "frontend"
+      name    = "frontend-${var.environment}"
       type    = "A"
       ttl     = 300
       rrdatas = [module.gke_autopilot.frontend_ip_address]
@@ -26,7 +26,7 @@ module "cloud_dns_backend" {
 
   dns_records = {
     frontend = {
-      name    = "backend"
+      name    = "backend-${var.environment}"
       type    = "A"
       ttl     = 300
       rrdatas = [module.gke_autopilot.api_ip_address]

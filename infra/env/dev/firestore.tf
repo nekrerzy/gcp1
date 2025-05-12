@@ -3,7 +3,7 @@ module "firestore" {
 
   project_id  = var.project_id
   location_id = var.region # location 1 region for development
-  database_id = "dev-firestore"
+  database_id = "${var.environment}-firestore"
 
   collections = [
     "users",
