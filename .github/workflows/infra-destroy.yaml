@@ -153,7 +153,7 @@ jobs:
       run: |
         terraform init \
           -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
-          -backend-config="prefix=terraform/state/dev"
+          -backend-config="prefix=terraform/state/${{ needs.determine-environment.outputs.environment }}"
 
     - name: Terraform Destroy Plan
       run: |
