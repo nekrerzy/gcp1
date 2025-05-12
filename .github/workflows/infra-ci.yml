@@ -2,6 +2,17 @@ name: 'Deploy Google Cloud Infrastructure'
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+          - staging
+
 
   push:
     branches:
