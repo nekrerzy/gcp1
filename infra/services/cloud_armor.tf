@@ -1,8 +1,7 @@
 
 
 resource "google_compute_security_policy" "default" {
-  count = var.enable_cloud_armor ? 1 : 0
-  name  = "ca-${var.project_id}-${var.environment}-${var.unique_suffix}"
+  name = "ca-${var.project_id}-${var.environment}-${var.unique_suffix}"
 
   # Rule to allow all traffic by default
   rule {

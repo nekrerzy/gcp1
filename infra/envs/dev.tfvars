@@ -92,7 +92,7 @@ espv2_service_account_roles = [
 # Security Policy (Cloud Armor)
 #################################################
 
-enable_cloud_armor = false
+
 
 security_policy_ddos_ip_ranges_1 = [
   "103.237.80.15/32",
