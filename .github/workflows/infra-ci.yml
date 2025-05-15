@@ -182,6 +182,17 @@ jobs:
           exit 1
         fi
 
+    - name: Terraform refresh
+      run: terraform refresh -var-file="../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
+        -var="region=${{ vars.GCP_REGION }}" \
+        -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+        -var="network_option=${{ vars.NETWORKING_OPTION || 'create_new' }}" \
+        -var="existing_vpc_name=${{ vars.VPC_NAME || '' }}" \
+        -var="existing_subnet_name=${{ vars.SUBNET_NAME || '' }}" \
+        -var="storage_location=${{ vars.GCP_REGION }}" \
+        -var="environment=${{ needs.determine-environment.outputs.environment }}" \
+        -var="unique_suffix=${{ vars.UNIQUE_SUFFIX || 'gcp101' }}"
+
     - name: Terraform Plan
       run: |
         terraform plan -lock=false \

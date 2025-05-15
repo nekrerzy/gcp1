@@ -40,7 +40,7 @@ storage_buckets = [
   },
   {
     name               = "app-media-prod"
-    storage_class      = "MULTI_REGIONAL"
+    storage_class      = "STANDARD"
     force_destroy      = false
     versioning_enabled = true
     labels = {
