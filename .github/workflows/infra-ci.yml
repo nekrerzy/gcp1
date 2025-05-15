@@ -39,13 +39,17 @@ jobs:
     steps:
       - id: set-env
         run: |
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          REF="${{ github.ref }}"
+          if [[ "$REF" == "refs/heads/main" ]]; then
             echo "environment=dev" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/* && "${{ github.ref }}" == *[Vv]* ]]; then
+          elif [[ "$REF" == refs/tags/staging-v* ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [[ "$REF" == refs/tags/prod-v* ]]; then
             echo "environment=prod" >> $GITHUB_OUTPUT
           else
             echo "environment=dev" >> $GITHUB_OUTPUT  # Default fallback
           fi
+
 
   lint:
     needs: determine-environment
