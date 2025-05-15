@@ -174,17 +174,17 @@ output "docker_image_path" {
 
 output "security_policy_id" {
   description = "The ID of the created security policy"
-  value       = google_compute_security_policy.default.id
+  value       = length(google_compute_security_policy.default) > 0 ? google_compute_security_policy.default[0].id : null
 }
 
 output "security_policy_name" {
   description = "The name of the created security policy"
-  value       = google_compute_security_policy.default.name
+  value       = length(google_compute_security_policy.default) > 0 ? google_compute_security_policy.default[0].name : null
 }
 
 output "security_policy_self_link" {
   description = "The self link of the security policy"
-  value       = google_compute_security_policy.default.self_link
+  value       = length(google_compute_security_policy.default) > 0 ? google_compute_security_policy.default[0].self_link : null
 }
 
 
