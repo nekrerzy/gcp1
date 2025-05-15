@@ -73,11 +73,9 @@ jobs:
         working-directory: infra/services
 
     steps:      
-    
     - name: Checkout repository
       uses: actions/checkout@v4
 
-     
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
@@ -95,22 +93,24 @@ jobs:
       with:
         project_id: ${{ vars.GCP_PROJECT_ID }}
 
-
-    # - name: Delete Cloud Endpoints service
-    #   run: |
-    #     gcloud endpoints services delete "demoapi.endpoints.${{ vars.GCP_PROJECT_ID }}.cloud.goog" \
-    #     --project "${{ vars.GCP_PROJECT_ID }}" --quiet
+    - name: Ensure tfvars file exists
+      run: |
+        if [ ! -f "../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
+          echo "tfvars file not found for environment: ${{ needs.determine-environment.outputs.environment }}"
+          exit 1
+        fi
 
     - name: Terraform Init
       run: |
         terraform init \
           -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}" \
-          -backend-config="prefix=terraform/state/${{ github.event.inputs.environment }}"
+          -backend-config="prefix=terraform/state/${{ needs.determine-environment.outputs.environment }}"
 
     - name: Terraform Destroy Plan
       run: |
         terraform plan -destroy \
-          -out="${{ env.TF_VAR_environment }}.destroy.tfplan" \
+          -out="${{ needs.determine-environment.outputs.environment }}.destroy.tfplan" \
+          -var-file="../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
           -var="region=${{ env.TF_VAR_location }}" \
           -var="project_id=${{ env.TF_VAR_GCP_PROJECT_ID }}" \
           -var="network_option=${{ env.TF_VAR_network_option }}" \
@@ -120,4 +120,4 @@ jobs:
     - name: Terraform Destroy Apply
       run: |
         terraform apply -auto-approve \
-          ${{ env.TF_VAR_environment }}.destroy.tfplan
+          ${{ needs.determine-environment.outputs.environment }}.destroy.tfplan
