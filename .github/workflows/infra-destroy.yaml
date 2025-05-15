@@ -110,7 +110,7 @@ jobs:
       run: |
         terraform plan -destroy \
           -out="${{ needs.determine-environment.outputs.environment }}.destroy.tfplan" \
-          -var-file="../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
+          -var-file="../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
           -var="region=${{ env.TF_VAR_location }}" \
           -var="project_id=${{ env.TF_VAR_GCP_PROJECT_ID }}" \
           -var="network_option=${{ env.TF_VAR_network_option }}" \
