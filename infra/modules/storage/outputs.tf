@@ -16,14 +16,14 @@ output "bucket_self_links" {
 
 output "buckets_details" {
   description = "Detailed information about each bucket"
-  value       = [
+  value = [
     for i, bucket in google_storage_bucket.buckets : {
-      name              = bucket.name
-      url               = bucket.url
-      location          = bucket.location
-      self_link         = bucket.self_link
-      project           = bucket.project
-      storage_class     = bucket.storage_class
+      name               = bucket.name
+      url                = bucket.url
+      location           = bucket.location
+      self_link          = bucket.self_link
+      project            = bucket.project
+      storage_class      = bucket.storage_class
       versioning_enabled = bucket.versioning[0].enabled
     }
   ]

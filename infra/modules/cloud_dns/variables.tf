@@ -1,15 +1,15 @@
 variable "project_id" {
-  description = "ID del proyecto de Google Cloud"
+  description = "ID of the Google Cloud project"
   type        = string
 }
 
 variable "managed_zone_name" {
-  description = "Nombre de la zona DNS gestionada existente"
+  description = "Name of the existing managed DNS zone"
   type        = string
 }
 
 variable "dns_records" {
-  description = "Mapa de registros DNS a crear"
+  description = "Map of DNS records to create"
   type = map(object({
     name    = string
     type    = string

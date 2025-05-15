@@ -19,7 +19,7 @@ module "cloud_sql" {
   availability_type   = var.environment == "dev" ? "ZONAL" : "REGIONAL"
   edition             = var.environment == "dev" ? "ENTERPRISE" : "ENTERPRISE_PLUS"
   backup_enabled      = true # Keep backups on even for dev
-  deletion_protection = var.environment == "prod" ? false : false
+  deletion_protection = var.environment == "prod" ? true : false
 
   depends_on = [
     module.networking,

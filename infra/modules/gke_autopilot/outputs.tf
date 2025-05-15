@@ -18,7 +18,7 @@ output "dns_endpoint_config" {
   description = "The DNS endpoint configuration for the GKE cluster"
   value       = google_container_cluster.autopilot.control_plane_endpoints_config[0].dns_endpoint_config[0].endpoint
   sensitive   = false
-  
+
 }
 
 
@@ -37,13 +37,13 @@ output "frontend_ip_address" {
 output "frontend_ip_name" {
   description = "The name of the global static IP address for GKE ingress"
   value       = google_compute_global_address.frontend.name
-  
+
 }
 
 output "api_ip_address" {
   description = "The global static IP address for GKE ingress"
   value       = google_compute_global_address.api.address
-  
+
 }
 
 output "api_ip_name" {

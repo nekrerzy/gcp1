@@ -35,7 +35,6 @@ module "storage" {
   environment   = var.environment
   unique_suffix = local.bucket_suffix
 
-
   # Pass the processed bucket configurations
   buckets = local.processed_buckets
 

@@ -70,11 +70,11 @@ variable "backup_start_time" {
 
 variable "database_flags" {
   description = "Database flags to set"
-  type        = list(object({
+  type = list(object({
     name  = string
     value = string
   }))
-  default     = []
+  default = []
 }
 
 variable "user_name" {

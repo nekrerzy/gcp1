@@ -137,7 +137,7 @@ async def check_firestore():
     start_time = datetime.now()
     try:
         # Initialize Firestore client
-        db = firestore.Client(database="prod-firestore")
+        db = firestore.Client(database="dev-firestore")
         
         # Create a test collection reference
         health_collection = db.collection("health_checks")
