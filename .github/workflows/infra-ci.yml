@@ -173,7 +173,7 @@ jobs:
 
     - name: Ensure tfvars file exists
       run: |
-        if [ ! -f "../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
+        if [ ! -f "../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
           echo "tfvars file not found for environment: ${{ needs.determine-environment.outputs.environment }}"
           exit 1
         fi
@@ -182,7 +182,7 @@ jobs:
       run: |
         terraform plan -lock=false \
           -out='${{ needs.determine-environment.outputs.environment }}.plan.tfplan' \
-          -var-file="../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
+          -var-file="../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
           -var="region=${{ vars.GCP_REGION }}" \
           -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
           -var="network_option=${{ vars.NETWORKING_OPTION || 'create_new' }}" \
