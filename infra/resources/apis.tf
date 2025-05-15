@@ -1,6 +1,6 @@
 
 module "api_resources" {
-  source = "../../modules/api_resources"
+  source = "../modules/api_resources"
 
   project_id = var.project_id
   apis = [

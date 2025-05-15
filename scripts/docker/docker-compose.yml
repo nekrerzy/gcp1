@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       # Mount the repository as read-only to avoid permission issues
-      - ${REPO_ROOT:-../../}:/repo:ro
+      - ${REPO_ROOT:-../}:/repo:ro
       # Mount a volume for takeoff config and other generated files
       - gcp-takeoff-config:/config
       # Mount credential volumes

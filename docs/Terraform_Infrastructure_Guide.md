@@ -63,9 +63,9 @@ To add Redis to your deployment, you'll need to make these changes:
 First, check if the Redis API is included in your api_resources module:
 
 ```hcl
-# In infra/env/dev/apis.tf
+# In infra/services/apis.tf
 module "api_resources" {
-  source     = "../../modules/api_resources"
+  source     = "../modules/api_resources"
   project_id = var.project_id
   apis       = [
     "compute.googleapis.com",
@@ -184,11 +184,11 @@ output "current_location_id" {
 ```
 
 #### Step 5: Use the module in your environment
-Add `infra/env/dev/redis.tf` file:
+Add `infra/services/redis.tf` file:
 
 ```hcl
 module "redis" {
-  source         = "../../modules/redis"
+  source         = "../modules/redis"
   project_id     = var.project_id
   name           = "genai-redis"
   region         = var.region
@@ -207,7 +207,7 @@ module "redis" {
 ```
 
 #### Step 6: Add outputs to access Redis connection details
-In your `infra/env/dev/outputs.tf` file:
+In your `infra/services/outputs.tf` file:
 
 ```hcl
 output "redis_host" {

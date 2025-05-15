@@ -114,7 +114,7 @@ jobs:
 
     - name: Terraform Init
       run: |
-        cd infra/env/dev
+        cd infra/services
         terraform init -backend=false
 
     - name: Terraform Validate
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: infra/env/dev
+        working-directory: infra/services
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -171,9 +171,18 @@ jobs:
           -backend-config="bucket=${{ vars.BACKEND_STORAGE_ACCOUNT }}" \
           -backend-config="prefix=terraform/state/${{ needs.determine-environment.outputs.environment }}"
 
+    - name: Ensure tfvars file exists
+      run: |
+        if [ ! -f "../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
+          echo "tfvars file not found for environment: ${{ needs.determine-environment.outputs.environment }}"
+          exit 1
+        fi
+
     - name: Terraform Plan
       run: |
-        terraform plan -lock=false -out='${{ needs.determine-environment.outputs.environment }}.plan.tfplan' \
+        terraform plan -lock=false \
+          -out='${{ needs.determine-environment.outputs.environment }}.plan.tfplan' \
+          -var-file="../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" \
           -var="region=${{ vars.GCP_REGION }}" \
           -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
           -var="network_option=${{ vars.NETWORKING_OPTION || 'create_new' }}" \
@@ -188,7 +197,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: terraform-plan
-        path: infra/env/dev/${{ needs.determine-environment.outputs.environment }}.plan.tfplan
+        path: infra/services/${{ needs.determine-environment.outputs.environment }}.plan.tfplan
         retention-days: 5
 
     - name: Terraform Plan Status
@@ -196,9 +205,9 @@ jobs:
       run: exit 1
 
     - name: Terraform Apply
-      
       run: |
         terraform apply -auto-approve -input=false ${{ needs.determine-environment.outputs.environment }}.plan.tfplan
+
 
     - name: Capture Terraform Outputs
       if: success()

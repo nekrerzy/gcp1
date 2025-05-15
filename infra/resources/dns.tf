@@ -1,7 +1,7 @@
 
 
 module "cloud_dns_frontend" {
-  source = "../../modules/cloud_dns"
+  source = "../modules/cloud_dns"
 
   project_id        = var.project_id
   managed_zone_name = "sub-zone-${data.google_project.project.number}"
@@ -19,7 +19,7 @@ module "cloud_dns_frontend" {
 
 
 module "cloud_dns_backend" {
-  source = "../../modules/cloud_dns"
+  source = "../modules/cloud_dns"
 
   project_id        = var.project_id
   managed_zone_name = "sub-zone-${data.google_project.project.number}"

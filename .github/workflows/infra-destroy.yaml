@@ -70,7 +70,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: infra/env/dev
+        working-directory: infra/services
 
     steps:      
     

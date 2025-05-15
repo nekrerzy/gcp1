@@ -4,7 +4,7 @@ data "google_project" "project" {
 }
 
 module "vertex_ai" {
-  source = "../../modules/vertex_ai"
+  source = "../modules/vertex_ai"
 
   region                = var.region
   network_id            = "projects/${data.google_project.project.number}/global/networks/${module.networking.network_name}"

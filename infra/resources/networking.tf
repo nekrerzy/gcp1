@@ -1,5 +1,5 @@
 module "networking" {
-  source = "../../modules/networking"
+  source = "../modules/networking"
 
   project_id = var.project_id
 

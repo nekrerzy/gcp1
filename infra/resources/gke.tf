@@ -1,5 +1,5 @@
 module "gke_autopilot" {
-  source = "../../modules/gke_autopilot"
+  source = "../modules/gke_autopilot"
 
   project_id   = var.project_id
   cluster_name = "gke-${var.project_id}-${var.environment}-${var.unique_suffix}"

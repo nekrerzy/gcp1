@@ -1,5 +1,5 @@
 module "document_ai" {
-  source = "../../modules/document_ai"
+  source = "../modules/document_ai"
 
   project_id            = var.project_id
   location              = var.document_ai_location

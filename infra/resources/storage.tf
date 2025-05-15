@@ -28,7 +28,7 @@ locals {
 
 # Import the storage module
 module "storage" {
-  source = "../../modules/storage"
+  source = "../modules/storage"
 
   project_id    = var.project_id
   location      = var.storage_location

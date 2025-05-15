@@ -1,5 +1,5 @@
 module "cloud_sql" {
-  source = "../../modules/cloud_sql"
+  source = "../modules/cloud_sql"
 
 
   project_id      = var.project_id

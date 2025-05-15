@@ -70,7 +70,7 @@ locals {
 
 1. Create new directory under `env/`
    ```bash
-   cp -r infra/env/dev infra/env/prod
+   cp -r infra/services infra/env/prod
    ```
 
 2. Update environment-specific files:
@@ -271,7 +271,7 @@ This section provides guidance on testing Terraform configurations both locally 
    cd ais-azure-genai-iac
 
    # Navigate to the environment directory
-   cd infra/env/dev
+   cd infra/services
    ```
 
 #### Testing Workflow
@@ -408,13 +408,13 @@ jobs:
       uses: hashicorp/setup-terraform@v1
     - name: Terraform Init
       run: terraform init
-      working-directory: ./infra/env/dev
+      working-directory: ./infra/services
     - name: Terraform Validate
       run: terraform validate
-      working-directory: ./infra/env/dev
+      working-directory: ./infra/services
     - name: Terraform Plan
       run: terraform plan -no-color
-      working-directory: ./infra/env/dev
+      working-directory: ./infra/services
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -440,15 +440,15 @@ These values are stored as secrets in your CI/CD platform and injected as enviro
 
 ### Differences Between Local and CI/CD Testing
 
-| Aspect | Local Testing | CI/CD Pipeline |
-|--------|--------------|----------------|
-| Authentication | Interactive login (az login) | Service Principal |
-| State Storage | Local or remote | Always remote |
-| Variable Files | Personal .tfvars files | Environment-specific variables |
-| Approval Process | None | Manual approvals for production |
-| Scope | Can target specific resources | Always full environment |
-| Parallelism | Default (10) | Higher (can be configured) |
-| Logging | Standard output | Captured in CI/CD logs |
+| Aspect           | Local Testing                 | CI/CD Pipeline                  |
+| ---------------- | ----------------------------- | ------------------------------- |
+| Authentication   | Interactive login (az login)  | Service Principal               |
+| State Storage    | Local or remote               | Always remote                   |
+| Variable Files   | Personal .tfvars files        | Environment-specific variables  |
+| Approval Process | None                          | Manual approvals for production |
+| Scope            | Can target specific resources | Always full environment         |
+| Parallelism      | Default (10)                  | Higher (can be configured)      |
+| Logging          | Standard output               | Captured in CI/CD logs          |
 
 ### Troubleshooting
 
@@ -506,7 +506,7 @@ This project uses Azure Storage for managing Terraform state files, providing a 
 
 ### Backend Configuration
 
-The Terraform backend is configured in `infra/env/dev/providers.tf` to use Azure Storage:
+The Terraform backend is configured in `infra/services/providers.tf` to use Azure Storage:
 
 ```hcl
 terraform {
