@@ -195,6 +195,7 @@ jobs:
           -var="storage_location=${{ vars.GCP_REGION }}" \
           -var="environment=${{ needs.determine-environment.outputs.environment }}" \
           -var="unique_suffix=${{ vars.UNIQUE_SUFFIX || 'gcp101' }}"
+          -var="storage_location=${{ vars.GCP_REGION }}" \
       continue-on-error: true
 
     - name: Upload Terraform Plan

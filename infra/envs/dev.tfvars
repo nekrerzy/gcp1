@@ -1,8 +1,7 @@
 #################################################
 # Environment & Naming
 #################################################
-unique_suffix    = "gcp101"
-storage_location = "us-central1"
+unique_suffix = "gcp101"
 
 #################################################
 # Cloud SQL / Database
@@ -92,6 +91,9 @@ espv2_service_account_roles = [
 #################################################
 # Security Policy (Cloud Armor)
 #################################################
+
+enable_cloud_armor = false
+
 security_policy_ddos_ip_ranges_1 = [
   "103.237.80.15/32",
   "103.237.80.10/32",
@@ -106,6 +108,7 @@ security_policy_ddos_ip_ranges_1 = [
 ]
 
 security_policy_ddos_ip_ranges_2 = [
+  "190.62.19.235/32",
   "154.113.23.0/24",
   "165.225.0.0/17",
   "165.225.192.0/18",

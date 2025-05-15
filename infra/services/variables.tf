@@ -323,6 +323,13 @@ variable "document_ai_location" {
 # 8. Security Policy (Cloud Armor)
 ##############################
 
+variable "enable_cloud_armor" {
+  description = "Whether to create the Cloud Armor security policy"
+  type        = bool
+  default     = true
+}
+
+
 variable "security_policy_ddos_ip_ranges_1" {
   description = "List of IP ranges for the first DDoS rate limiting rule"
   type        = list(string)

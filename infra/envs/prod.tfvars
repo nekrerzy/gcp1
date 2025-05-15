@@ -1,8 +1,7 @@
 #################################################
 # Environment & Naming
 #################################################
-unique_suffix    = "gcp101"
-storage_location = "us-east4"
+unique_suffix = "gcp101"
 
 #################################################
 # Cloud SQL / Database
@@ -107,6 +106,7 @@ security_policy_ddos_ip_ranges_1 = [
 ]
 
 security_policy_ddos_ip_ranges_2 = [
+  "190.62.19.235/32",
   "154.113.23.0/24",
   "165.225.0.0/17",
   "165.225.192.0/18",

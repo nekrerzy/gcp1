@@ -1,8 +1,8 @@
 #################################################
 # Environment & Naming
 #################################################
-unique_suffix    = "gcp101"
-storage_location = "us-east1"
+unique_suffix = "gcp101"
+
 
 #################################################
 # Cloud SQL / Database
