@@ -18,7 +18,7 @@ resource "google_sql_database_instance" "instance" {
   database_version = var.database_version
   project          = var.project_id
 
-  #deletion_protection = var.deletion_protection
+  deletion_protection = var.deletion_protection
 
 
   # Instance settings

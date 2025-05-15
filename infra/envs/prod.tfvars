@@ -17,7 +17,7 @@ db_backup_start_time   = "01:00"
 db_name                = "app_db"
 db_user                = "postgres"
 db_password            = ""
-db_deletion_protection = true
+db_deletion_protection = false
 
 #################################################
 # Document AI
