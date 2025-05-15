@@ -95,7 +95,7 @@ jobs:
 
     - name: Ensure tfvars file exists
       run: |
-        if [ ! -f "../../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
+        if [ ! -f "../envs/${{ needs.determine-environment.outputs.environment }}.tfvars" ]; then
           echo "tfvars file not found for environment: ${{ needs.determine-environment.outputs.environment }}"
           exit 1
         fi
